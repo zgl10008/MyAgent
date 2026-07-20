@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/agent -H 'Content-Type: application/json' -d '{\"messages\":[{\"role\":\"user\",\"content\":\"Today World Cup semi-final England vs Argentina result?\"}],\"agent_mode\":\"react\"}')",
+      "Bash(python -c ' *)",
+      "Bash(printf '{\"messages\":[{\"role\":\"user\",\"content\":\"Today World Cup semi-final England vs Argentina result?\"}],\"agent_mode\":\"react\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/agent -H \"Content-Type: application/json\" -d @/tmp/req.json)",
+      "Bash(python3 -c ' *)",
+      "Read(//tmp/**)",
+      "Bash(curl -s http://localhost:8000/api/v1/health)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(.venv/Scripts/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000)",
+      "Bash(grep -i \"milvus\\\\|RAGService\\\\|store=\" /tmp/backend.log 2>/dev/null | tail -5)",
+      "Bash(.venv/Scripts/python -c ' *)"
+    ]
+  }
+}
