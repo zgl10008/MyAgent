@@ -50,6 +50,9 @@ class _ToolRegistryAdapter:
     def list_tool_names(self) -> list[str]:
         return [t.name for t in self._registry.get_all_tools()]
 
+    def get_tools_description(self) -> str:
+        return self._registry.get_tools_description()
+
     async def invoke(self, name: str, arguments: dict[str, Any]) -> str:
         try:
             tool = self._registry.get_tool(name)
@@ -153,9 +156,10 @@ class AgentService:
             pg_repo=pg_repo,
         )
 
-        # 4. 追踪与意图
+        # 4. 追踪与意图（LLM 分类 + 关键词降级）
         self._tracer = InMemoryTracer()
-        self._intent_recognizer = IntentRecognizer()
+        intent_llm = self._model_adapter.get_llm("intent")
+        self._intent_recognizer = IntentRecognizer(llm=intent_llm)
 
         # 5. 编排器配置
         orchestrator_config = _DictConfig(

@@ -301,6 +301,7 @@ class AgentOrchestrator:
         ctx: Dict[str, Any] = {
             "session_id": session_id,
             "tool_names": self._tool_names(intent),
+            "tool_descriptions": getattr(self._tools, "get_tools_description", lambda: "")(),
             "trace_callback": trace_cb,
             "extra_system": suffix + f"当前识别意图：{intent.intent}，槽位：{intent.slots}",
         }

@@ -156,8 +156,10 @@ class ReActAgent:
         self.max_steps = max(1, max_steps)
         self.session_id = session_id or "default"
 
-    def _tool_catalog_text(self, tool_names: Sequence[str]) -> str:
-        """工具列表描述（若注册表无描述则仅列名）。"""
+    def _tool_catalog_text(self, tool_names: Sequence[str], tool_descriptions: str = "") -> str:
+        """工具列表描述。优先使用传入的描述文本，否则仅列工具名。"""
+        if tool_descriptions:
+            return tool_descriptions
         lines = []
         for name in tool_names:
             lines.append(f"- {name}")
@@ -169,12 +171,14 @@ class ReActAgent:
 
         context 可包含：
         - tool_names: 允许使用的工具名列表
+        - tool_descriptions: 工具的自然语言描述文本（直接写入 prompt）
         - session_id: 会话 ID（覆盖实例默认值）
         - trace_callback: 可选 async 回调(step_dict) 用于外部追踪
         """
         session_id = str(context.get("session_id", self.session_id))
         trace_cb = context.get("trace_callback")
         tool_names: List[str] = list(context.get("tool_names") or [])
+        tool_descriptions: str = str(context.get("tool_descriptions", ""))
         extra_system = str(context.get("extra_system", ""))
 
         steps: List[Dict[str, Any]] = []
@@ -190,7 +194,7 @@ class ReActAgent:
         mem_block = "\n".join(f"- {s}" for s in mem_snippets) if mem_snippets else "（无）"
 
         for step_idx in range(self.max_steps):
-            tool_desc = self._tool_catalog_text(tool_names)
+            tool_desc = self._tool_catalog_text(tool_names, tool_descriptions)
             history_block = "\n".join(history_lines) if history_lines else "（尚无）"
             user_prompt = build_react_user_prompt(query, tool_desc, history_block)
             messages: List[Dict[str, str]] = [
