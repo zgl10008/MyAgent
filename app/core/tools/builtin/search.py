@@ -105,15 +105,24 @@ class WebSearchTool(BaseTool):
 
         except httpx.ConnectTimeout:
             msg = (
-                f"搜索超时：无法连接 SerpAPI。\n"
-                f"如果使用了代理，请在 .env 中设置 SEARCH_PROXY。\n"
-                f"没有代理的话，可访问 https://duckduckgo.com/?q={query} 手动搜索。"
+                f"搜索超时：无法连接 SerpAPI（国内需代理）。\n"
+                f"解决方案：在 .env 中设置 SEARCH_PROXY=http://代理地址:端口\n"
+                f"或浏览器访问 https://duckduckgo.com/?q={query} 手动搜索。"
             )
             logger.warning("SerpAPI 连接超时 query={}", query)
+            return msg
+        except httpx.ConnectError as exc:
+            msg = (
+                f"搜索失败：网络连接错误。\n"
+                f"如需使用搜索，请在 .env 中配置 SEARCH_PROXY。\n"
+                f"详情: {exc!s}"
+            )
+            logger.warning("SerpAPI 连接错误 query={}: {}", query, exc)
             return msg
         except httpx.HTTPStatusError as exc:
             logger.warning("SerpAPI HTTP {}: {}", exc.response.status_code, exc)
             return f"搜索服务返回错误（HTTP {exc.response.status_code}）。"
         except Exception as exc:
+            err_msg = str(exc) or type(exc).__name__
             logger.warning("SerpAPI 失败: {}", exc)
-            return f"搜索暂时不可用。错误: {exc!s}"
+            return f"搜索暂时不可用。错误: {err_msg}"
