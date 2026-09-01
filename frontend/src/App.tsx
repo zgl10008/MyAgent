@@ -23,8 +23,8 @@ function App() {
         {/* 左侧导航 */}
         <aside className="w-56 h-screen bg-emerald-900 text-white flex flex-col shrink-0">
           <div className="px-5 py-5 border-b border-emerald-700">
-            <h1 className="text-lg font-bold tracking-tight">🫀 心康助手</h1>
-            <p className="text-xs text-emerald-300 mt-0.5">心血管慢病管理 Agent</p>
+            <h1 className="text-lg font-bold tracking-tight">🫀 Agent/RAG 平台</h1>
+            <p className="text-xs text-emerald-300 mt-0.5">心血管慢病默认 Demo</p>
           </div>
 
           {/* 主导航 Tab */}

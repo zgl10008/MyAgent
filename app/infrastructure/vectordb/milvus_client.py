@@ -121,7 +121,17 @@ class MilvusManager:
         def _insert() -> None:
             col = Collection(collection, using=self._alias)
             col.insert([ids, vectors])
-            col.flush()
+            try:
+                col.flush()
+            except Exception as fe:
+                msg = str(fe).lower()
+                if not (
+                    isinstance(fe, FileExistsError)
+                    or "winerror 183" in msg
+                    or "当文件已存在时" in msg
+                    or "fileexists" in msg
+                ):
+                    raise
 
         try:
             await _run_sync(_insert)

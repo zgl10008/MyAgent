@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.etl import ETLPipeline
+from app.api.upload_validation import validate_upload
 from app.infrastructure.database.models import Document, DocumentChunk
 from app.infrastructure.database.session import get_async_session
 from app.models.schemas import DocumentInfo, DocumentUploadResponse
@@ -30,11 +31,11 @@ async def upload_document(
     upload_root.mkdir(parents=True, exist_ok=True)
 
     doc_id = str(uuid.uuid4())
-    safe_name = file.filename or "unnamed"
+    raw = await file.read()
+    safe_name = validate_upload(file.filename, raw)
     dest = upload_root / f"{doc_id}_{safe_name}"
 
     try:
-        raw = await file.read()
         await asyncio.to_thread(dest.write_bytes, raw)
     except Exception as exc:
         logger.exception("保存上传文件失败: {}", exc)

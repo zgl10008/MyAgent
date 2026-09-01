@@ -25,6 +25,7 @@ class ChatRequest(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1)
     conversation_id: str | None = Field(default=None, description="可选会话 ID")
+    domain: str = Field(default="cardiovascular", description="领域策略：general / cardiovascular")
 
 
 class ChatResponse(BaseModel):
@@ -140,6 +141,7 @@ class StepInfo(BaseModel):
     observation: str | None = Field(default=None, description="工具返回结果")
     final_answer: str | None = Field(default=None, description="最终答案")
     error: str | None = Field(default=None, description="步骤错误信息")
+    reflection_score: int | None = Field(default=None, description="Evaluator 质量评分")
 
 
 class AgentChatRequest(BaseModel):
@@ -150,7 +152,8 @@ class AgentChatRequest(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1)
     conversation_id: str | None = Field(default=None, description="会话 ID")
-    agent_mode: str = Field(default="react", description="Agent 模式: react / plan_execute")
+    agent_mode: str = Field(default="auto", description="Agent 模式: auto / react / plan_execute。auto 由后端自动路由")
+    domain: str = Field(default="cardiovascular", description="领域策略：general / cardiovascular")
 
 
 class AgentChatResponse(BaseModel):
@@ -170,6 +173,24 @@ class AgentChatResponse(BaseModel):
     reflection_score: int | None = Field(default=None, description="反思质量评分 0-100")
     degraded: bool = Field(default=False, description="是否降级")
 
+    # 反思扩展字段（反思闭环新增）
+    reflection_warnings: list[str] = Field(
+        default_factory=list,
+        description="反思产生的用户可见警告（如疑似幻觉、修正标记）",
+    )
+    hallucination_detected: bool = Field(
+        default=False,
+        description="反思是否检测到疑似幻觉",
+    )
+    completeness_notes: str = Field(
+        default="",
+        description="反思的完整性备注",
+    )
+    correction_applied: bool = Field(
+        default=False,
+        description="是否对回答进行了自动修正",
+    )
+
 
 # ==============================================================================
 # RAG 扩展模型
@@ -183,6 +204,7 @@ class RAGChatRequest(BaseModel):
     query: str | None = Field(default=None, description="显式检索查询（为空则取最后一条消息）")
     mode: str = Field(default="hybrid", description="检索模式: vector / keyword / hybrid")
     top_k: int = Field(default=5, ge=1, le=20, description="检索数量")
+    domain: str = Field(default="cardiovascular", description="领域策略：general / cardiovascular")
 
 
 class RAGChatResponse(BaseModel):

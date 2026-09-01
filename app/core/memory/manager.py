@@ -23,6 +23,10 @@ class MemoryManager:
 
     async def get_context(self, session_id: str, query: str) -> MemoryContext:
         """获取与当前查询相关的记忆上下文（短期历史 + 长期召回）。"""
+        logger.info(
+            "[READ] manager.get_context session_id={}",
+            session_id,
+        )
         try:
             short_msgs = await self._stm.get_history(session_id)
         except Exception as e:
@@ -35,6 +39,12 @@ class MemoryManager:
             logger.exception("长期记忆召回失败: {}", e)
             long_items = []
 
+        logger.info(
+            "[READ] manager.get_context 结果 session_id={} short_count={} long_count={}",
+            session_id,
+            len(short_msgs),
+            len(long_items),
+        )
         return MemoryContext(
             session_id=session_id,
             short_term_messages=short_msgs,
@@ -43,6 +53,12 @@ class MemoryManager:
 
     async def save(self, session_id: str, message: Message) -> None:
         """将新消息写入短期记忆（滑动窗口与压缩由 ShortTermMemory 负责）。"""
+        logger.info(
+            "[记忆-写] manager.save session_id={} role={} content_len={}",
+            session_id,
+            message.role.value,
+            len(message.content or ""),
+        )
         try:
             await self._stm.add_message(session_id, message)
         except Exception as e:

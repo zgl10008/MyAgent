@@ -16,6 +16,7 @@ class ChunkStrategy(str, Enum):
     FIXED = "fixed"
     RECURSIVE = "recursive"
     PARAGRAPH = "paragraph"
+    LANGCHAIN = "langchain"  # 使用 LangChain RecursiveCharacterTextSplitter
 
 
 class DocumentChunker:
@@ -50,7 +51,24 @@ class DocumentChunker:
             return self._chunk_fixed(text)
         if strategy == ChunkStrategy.PARAGRAPH:
             return self._chunk_paragraph(text)
+        if strategy == ChunkStrategy.LANGCHAIN:
+            return self._chunk_langchain(text)
         return self._chunk_recursive(text, _depth=0)
+
+    def _chunk_langchain(self, text: str) -> List[str]:
+        """使用 LangChain RecursiveCharacterTextSplitter 分块。"""
+        try:
+            from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap,
+                separators=["\n\n", "\n", "。", ". ", " "],
+            )
+            return splitter.split_text(text)
+        except ImportError:
+            logger.warning("LangChain 未安装，回退递归分块")
+            return self._chunk_recursive(text, _depth=0)
 
     def _chunk_fixed(self, text: str) -> List[str]:
         """按固定字符窗口切片（近似 token 长度）。"""

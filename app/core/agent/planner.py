@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-规划 Agent：Plan-and-Execute，含任务分解、执行与重规划。
+规划 Agent：Plan-and-Execute，含任务分解、ReAct 执行与重规划。
+
+Plan-and-Execute = 规划 + 执行，其中执行阶段复用 ReActAgent。
+与纯 ReAct 的关系：纯 ReAct 是一层循环（Thought→Action→Obs），
+Plan-and-Execute 是两层——上层规划拆解，下层每个子任务走 ReAct 循环。
 """
 
 from __future__ import annotations
@@ -24,18 +28,16 @@ PLAN_SYSTEM_PROMPT = """你是任务规划专家。请将用户目标拆分为�
     {
       "id": "t1",
       "title": "子任务标题",
-      "description": "具体要做什么",
-      "action_type": "tool|reasoning",
-      "tool_name": "若 action_type 为 tool 则填写工具名，否则 null",
-      "tool_args_hint": "工具参数要点（自然语言提示）"
+      "description": "具体要做什么——会交给 ReAct Agent 执行，它可以用工具或直接推理",
+      "expected_tools": ["可能需要调用的工具名，没有则为空数组"]
     }
   ]
 }
 
 规则：
-- action_type 为 reasoning 表示主要依赖模型推理整合，无需调用工具。
 - 子任务数量建议 2～8 个，避免过细或过粗。
 - id 必须唯一。
+- 每个子任务的 description 要足够具体，让 ReAct Agent 能独立执行。
 """
 
 
@@ -52,6 +54,31 @@ REPLAN_SYSTEM_PROMPT = """你是任务规划专家。根据已执行结果与错
 """
 
 
+# ---------------------------------------------------------------------------
+# ReAct Agent 工厂协议（用于在 Plan 中创建 ReAct Agent 执行子任务）
+# ---------------------------------------------------------------------------
+
+
+class ReActAgentFactory(Protocol):
+    """创建 ReAct Agent 的工厂函数。
+
+    Plan-and-Execute 的每个子任务都通过此工厂创建一个 ReAct Agent 实例执行。
+    这样保证了"执行阶段 = ReAct 循环"的架构一致性。
+    """
+
+    async def __call__(
+        self,
+        subtask_description: str,
+        allowed_tools: list[str] | None = None,
+    ) -> AgentResult:
+        ...
+
+
+# ---------------------------------------------------------------------------
+# 数据结构
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class SubTask:
     """单个子任务。"""
@@ -59,20 +86,10 @@ class SubTask:
     id: str
     title: str
     description: str
-    action_type: str  # "tool" | "reasoning"
-    tool_name: Optional[str] = None
-    tool_args_hint: Optional[str] = None
+    expected_tools: list[str] = field(default_factory=list)
 
 
-@dataclass
-class PlanExecuteState:
-    """执行过程中的累积状态（便于重规划与追踪）。"""
-
-    plan: List[SubTask] = field(default_factory=list)
-    results: List[Dict[str, Any]] = field(default_factory=list)
-
-
-def _extract_json_object(text: str) -> Dict[str, Any]:
+def _extract_json_object(text: str) -> dict[str, Any]:
     """从模型输出中提取 JSON 对象。"""
     text = text.strip()
     try:
@@ -85,9 +102,9 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
     return json.loads(m.group(0))
 
 
-def _parse_subtasks(data: Dict[str, Any]) -> List[SubTask]:
+def _parse_subtasks(data: dict[str, Any]) -> list[SubTask]:
     raw_list = data.get("subtasks") or []
-    out: List[SubTask] = []
+    out: list[SubTask] = []
     for item in raw_list:
         if not isinstance(item, dict):
             continue
@@ -96,32 +113,45 @@ def _parse_subtasks(data: Dict[str, Any]) -> List[SubTask]:
                 id=str(item.get("id", f"task_{len(out)}")),
                 title=str(item.get("title", "")),
                 description=str(item.get("description", "")),
-                action_type=str(item.get("action_type", "reasoning")).lower(),
-                tool_name=item.get("tool_name"),
-                tool_args_hint=item.get("tool_args_hint"),
+                expected_tools=list(item.get("expected_tools") or []),
             )
         )
     return out
 
 
+# ---------------------------------------------------------------------------
+# PlannerAgent
+# ---------------------------------------------------------------------------
+
+
 class PlannerAgent:
-    """规划与执行：生成计划、逐步执行、失败时重规划。"""
+    """Plan-and-Execute Agent：规划 → ReAct 执行 → 重规划 → 汇总。
+
+    执行阶段通过 react_factory 创建 ReAct Agent 来执行每个子任务，
+    保证"执行 = ReAct 循环"的架构一致性。
+    """
 
     def __init__(
         self,
         llm: LLMCallable,
-        tools: ToolInvoker,
-        memory: Optional[MemoryLike],
+        summary_llm: LLMCallable | None = None,
         max_replan_attempts: int = 2,
+        max_steps_per_subtask: int = 5,
     ) -> None:
+        """
+        :param llm: 用于规划与重规划的 LLM
+        :param summary_llm: 用于最终汇总的 LLM（None 则复用 llm）
+        :param max_replan_attempts: 最大重规划次数
+        :param max_steps_per_subtask: 每个子任务的 ReAct 最大步数
+        """
         self._llm = llm
-        self._tools = tools
-        self._memory = memory
+        self._summary_llm = summary_llm or llm
         self.max_replan_attempts = max(0, max_replan_attempts)
+        self.max_steps_per_subtask = max(1, max_steps_per_subtask)
 
-    async def plan(self, query: str) -> List[SubTask]:
+    async def plan(self, query: str) -> list[SubTask]:
         """根据用户目标生成子任务列表。"""
-        messages: Sequence[Dict[str, str]] = [
+        messages: Sequence[dict[str, str]] = [
             {"role": "system", "content": PLAN_SYSTEM_PROMPT},
             {"role": "user", "content": f"用户目标：\n{query}\n\n请输出 JSON 计划。"},
         ]
@@ -129,132 +159,33 @@ class PlannerAgent:
             raw = await self._llm.acomplete(messages, temperature=0.3)
             data = _extract_json_object(raw)
             return _parse_subtasks(data)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("生成计划失败")
-            # 降级：单步推理任务
+        except Exception:
+            logger.exception("生成计划失败，降级为单步推理")
             return [
                 SubTask(
                     id="fallback_1",
                     title="直接回答",
                     description=query,
-                    action_type="reasoning",
+                    expected_tools=[],
                 )
             ]
-
-    async def execute(
-        self,
-        plan: List[SubTask],
-        query: str,
-        session_id: str,
-        tool_names: Optional[Sequence[str]] = None,
-        trace_callback: Optional[Any] = None,
-    ) -> AgentResult:
-        """
-        按顺序执行子任务；tool 类型调用工具，reasoning 类型用 LLM 综合上下文。
-        """
-        allowed = set(tool_names) if tool_names else None
-        results: List[Dict[str, Any]] = []
-        state = PlanExecuteState(plan=list(plan), results=[])
-
-        for idx, task in enumerate(plan):
-            rec: Dict[str, Any] = {
-                "subtask_id": task.id,
-                "title": task.title,
-                "action_type": task.action_type,
-            }
-            try:
-                if task.action_type == "tool" and task.tool_name:
-                    if allowed is not None and task.tool_name not in allowed:
-                        raise RuntimeError(f"工具 {task.tool_name} 不在允许列表中")
-                    # 将 hint 作为简单参数传入（企业场景可换为结构化解析）
-                    args = {"hint": task.tool_args_hint or "", "user_query": query}
-                    obs = await self._tools.invoke(task.tool_name, args)
-                    rec["observation"] = obs[:8000]
-                    rec["status"] = "ok"
-                else:
-                    # 推理子任务：用 LLM 汇总已有结果
-                    ctx = json.dumps(results, ensure_ascii=False, indent=2)[:12000]
-                    msgs: Sequence[Dict[str, str]] = [
-                        {
-                            "role": "system",
-                            "content": "你是执行专家。根据已有子任务结果，完成当前子任务描述，输出简洁结论。",
-                        },
-                        {
-                            "role": "user",
-                            "content": f"原始问题：{query}\n当前子任务：{task.title}\n详情：{task.description}\n已有结果：\n{ctx}",
-                        },
-                    ]
-                    text = await self._llm.acomplete(msgs, temperature=0.3)
-                    rec["llm_output"] = text[:8000]
-                    rec["status"] = "ok"
-            except Exception as e:  # noqa: BLE001
-                logger.exception("子任务执行失败: %s", task.id)
-                rec["status"] = "error"
-                rec["error"] = str(e)
-                results.append(rec)
-                state.results = results
-                if trace_callback:
-                    await trace_callback({"phase": "execute", "record": rec})
-                return AgentResult(
-                    success=False,
-                    final_answer="",
-                    steps=results,
-                    error=str(e),
-                )
-
-            results.append(rec)
-            state.results = results
-            if trace_callback:
-                await trace_callback({"phase": "execute", "record": rec})
-
-        # 最终汇总答案
-        try:
-            summary_msgs: Sequence[Dict[str, str]] = [
-                {
-                    "role": "system",
-                    "content": "你是总结助手。根据子任务执行记录，给出面向用户的完整最终答案。",
-                },
-                {
-                    "role": "user",
-                    "content": f"问题：{query}\n执行记录：\n{json.dumps(results, ensure_ascii=False, indent=2)[:14000]}",
-                },
-            ]
-            final = await self._llm.acomplete(summary_msgs, temperature=0.2)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("最终汇总失败")
-            return AgentResult(
-                success=False,
-                final_answer="",
-                steps=results,
-                error=f"汇总阶段失败: {e}",
-            )
-
-        if self._memory is not None:
-            try:
-                await self._memory.append_turn(
-                    session_id,
-                    "assistant",
-                    final,
-                    metadata={"agent": "planner", "subtasks": len(plan)},
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("写入记忆失败: %s", e)
-
-        return AgentResult(success=True, final_answer=final.strip(), steps=results)
 
     async def replan(
         self,
-        plan: List[SubTask],
-        results: List[Dict[str, Any]],
-        error: Optional[str],
-    ) -> List[SubTask]:
-        """根据执行结果与错误重新生成子任务列表。"""
+        query: str,
+        previous_plan: list[SubTask],
+        results: list[dict[str, Any]],
+    ) -> list[SubTask]:
+        """根据执行结果重新生成子任务列表。"""
         payload = {
-            "previous_plan": [task.__dict__ for task in plan],
+            "original_query": query,
+            "previous_plan": [
+                {"id": t.id, "title": t.title, "description": t.description}
+                for t in previous_plan
+            ],
             "results_so_far": results,
-            "error": error,
         }
-        messages: Sequence[Dict[str, str]] = [
+        messages: Sequence[dict[str, str]] = [
             {"role": "system", "content": REPLAN_SYSTEM_PROMPT},
             {
                 "role": "user",
@@ -266,64 +197,141 @@ class PlannerAgent:
         try:
             raw = await self._llm.acomplete(messages, temperature=0.3)
             data = _extract_json_object(raw)
-            return _parse_subtasks(data)
-        except Exception as e:  # noqa: BLE001
+            new_plan = _parse_subtasks(data)
+            if not new_plan:
+                logger.info("重规划返回空计划，任务完成")
+            return new_plan
+        except Exception:
             logger.exception("重规划失败")
-            return [
-                SubTask(
-                    id="replan_fallback",
-                    title="降级为单步推理",
-                    description="基于已有结果直接整合",
-                    action_type="reasoning",
-                )
-            ]
+            return []
 
     async def run_with_replan(
         self,
         query: str,
-        session_id: str,
-        tool_names: Optional[Sequence[str]] = None,
-        trace_callback: Optional[Any] = None,
+        react_factory: ReActAgentFactory,
+        tool_names: list[str] | None = None,
+        trace_callback: Any | None = None,
     ) -> AgentResult:
         """
-        高层封装：计划 → 执行；失败则重规划并最多重试 max_replan_attempts 次。
+        Plan-and-Execute 主流程：
+        1. LLM 制定计划 → 子任务列表
+        2. 对每个子任务，通过 react_factory 创建 ReAct Agent 执行
+        3. 失败时重规划，最多重试 max_replan_attempts 次
+        4. LLM 汇总所有子任务结果生成最终答案
+
+        :param react_factory: 创建 ReAct Agent 的工厂函数，
+            签名为 async (subtask_description, allowed_tools) -> AgentResult
+        :param tool_names: 允许使用的工具名列表
+        :param trace_callback: 可选追踪回调
         """
+        # ── 1. 制定计划 ──
         current_plan = await self.plan(query)
-        last_error: Optional[str] = None
-        aggregate_results: List[Dict[str, Any]] = []
+        if trace_callback:
+            await trace_callback({
+                "phase": "plan",
+                "subtask_count": len(current_plan),
+                "subtasks": [t.title for t in current_plan],
+            })
 
-        for attempt in range(self.max_replan_attempts + 1):
-            res = await self.execute(
-                current_plan,
-                query,
-                session_id,
-                tool_names=tool_names,
-                trace_callback=trace_callback,
-            )
-            if res.success:
-                return res
+        all_results: list[dict[str, Any]] = []
+        last_error: str | None = None
 
-            last_error = res.error
-            aggregate_results.extend(res.steps)
-            if attempt >= self.max_replan_attempts:
+        for replan_attempt in range(self.max_replan_attempts + 1):
+            # ── 2. 逐个执行子任务（每个子任务 = 一次 ReAct 循环）──
+            subtask_results: list[dict[str, Any]] = []
+            failed = False
+
+            for task in current_plan:
+                if trace_callback:
+                    await trace_callback({
+                        "phase": "execute_subtask",
+                        "subtask_id": task.id,
+                        "title": task.title,
+                    })
+
+                try:
+                    result: AgentResult = await react_factory(
+                        subtask_description=task.description,
+                        allowed_tools=task.expected_tools or tool_names,
+                    )
+                except Exception as exc:
+                    logger.exception("子任务 %s 执行异常", task.id)
+                    result = AgentResult(
+                        success=False,
+                        final_answer="",
+                        steps=[],
+                        error=str(exc),
+                    )
+
+                rec = {
+                    "subtask_id": task.id,
+                    "title": task.title,
+                    "success": result.success,
+                    "output": result.final_answer[:4000] if result.final_answer else "",
+                    "error": result.error,
+                    "steps": len(result.steps),
+                }
+                subtask_results.append(rec)
+                if trace_callback:
+                    await trace_callback({"phase": "subtask_done", "record": rec})
+
+                if not result.success:
+                    failed = True
+                    last_error = result.error
+                    # 不立即中断——收集所有结果后再决定是否重规划
+
+            all_results.extend(subtask_results)
+
+            # ── 3. 判断是否需要重规划 ──
+            if not failed:
+                break  # 全部成功，跳出重规划循环
+
+            if replan_attempt >= self.max_replan_attempts:
                 break
 
-            current_plan = await self.replan(current_plan, res.steps, last_error)
-            if not current_plan:
-                return AgentResult(
-                    success=False,
-                    final_answer="",
-                    steps=aggregate_results,
-                    error=last_error or "重规划后无子任务",
-                )
             if trace_callback:
-                await trace_callback(
-                    {"phase": "replan", "attempt": attempt + 1, "new_plan": [t.id for t in current_plan]}
-                )
+                await trace_callback({
+                    "phase": "replan",
+                    "attempt": replan_attempt + 1,
+                })
 
+            new_plan = await self.replan(query, current_plan, subtask_results)
+            if not new_plan:
+                break
+            current_plan = new_plan
+            if trace_callback:
+                await trace_callback({
+                    "phase": "replan_done",
+                    "new_subtasks": [t.title for t in current_plan],
+                })
+
+        # ── 4. LLM 汇总最终答案 ──
+        try:
+            summary_msgs: Sequence[dict[str, str]] = [
+                {
+                    "role": "system",
+                    "content": "你是总结助手。根据子任务执行记录，给出面向用户的完整最终答案。",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"原始问题：{query}\n\n"
+                        f"子任务执行记录：\n"
+                        f"{json.dumps(all_results, ensure_ascii=False, indent=2)[:14000]}"
+                    ),
+                },
+            ]
+            final = await self._summary_llm.acomplete(summary_msgs, temperature=0.2)
+        except Exception:
+            logger.exception("最终汇总失败")
+            # 降级：拼接成功子任务的输出
+            parts = [r["output"] for r in all_results if r["success"] and r["output"]]
+            final = "\n\n".join(parts) if parts else "抱歉，任务执行失败。"
+
+        overall_success = any(r["success"] for r in all_results)
         return AgentResult(
-            success=False,
-            final_answer="",
-            steps=aggregate_results,
-            error=last_error or "执行失败",
+            success=overall_success,
+            final_answer=final.strip(),
+            steps=all_results,
+            error=None if overall_success else (last_error or "所有子任务执行失败"),
         )

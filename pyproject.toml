@@ -36,6 +36,7 @@ dependencies = [
     "pypdf>=5.0.0",
     "openai>=1.60.0",
     "numpy>=2.0.0",
+    "jieba>=0.42.1",
 ]
 
 [project.optional-dependencies]
@@ -61,3 +62,13 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.11"
 strict = false
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --tb=short"
+markers = [
+    "asyncio: async 测试函数（由 tests/conftest.py 的钩子执行）",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

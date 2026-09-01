@@ -9,10 +9,24 @@ interface Props {
   reflectionScore: number | null;
   degraded: boolean;
   medical?: boolean;
+  /** 反思扩展字段 */
+  hallucinationDetected?: boolean;
+  completenessNotes?: string;
+  correctionApplied?: boolean;
+  reflectionWarnings?: string[];
 }
 
-export default function ToolCallLog({ toolCalls, reflectionScore, degraded, medical }: Props) {
-  if (toolCalls.length === 0 && reflectionScore === null && !degraded) return null;
+export default function ToolCallLog({
+  toolCalls, reflectionScore, degraded, medical,
+  hallucinationDetected, completenessNotes, correctionApplied, reflectionWarnings,
+}: Props) {
+  const hasContent =
+    toolCalls.length > 0 ||
+    reflectionScore !== null ||
+    degraded ||
+    hallucinationDetected ||
+    correctionApplied;
+  if (!hasContent) return null;
   const map = medical ? medicalToolMap : {};
 
   return (
@@ -38,6 +52,40 @@ export default function ToolCallLog({ toolCalls, reflectionScore, degraded, medi
           <span className={`text-sm font-bold ${reflectionScore >= 80 ? 'text-emerald-600' : reflectionScore >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
             {reflectionScore}/100
           </span>
+        </div>
+      )}
+
+      {/* 反思警告 */}
+      {reflectionWarnings && reflectionWarnings.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {reflectionWarnings.map((w, i) => (
+            <div key={i} className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded">
+              <span className="shrink-0">⚠️</span>
+              <span>{w}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 疑似幻觉警告 */}
+      {hallucinationDetected && (
+        <div className="mt-2 flex items-start gap-1.5 text-xs text-red-700 bg-red-50 px-2 py-1 rounded">
+          <span className="shrink-0">🚨</span>
+          <span>检测到可能存在不准确信息，建议核实关键事实</span>
+        </div>
+      )}
+
+      {/* 完整性备注 */}
+      {completenessNotes && (
+        <div className="mt-2 text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded">
+          {completenessNotes}
+        </div>
+      )}
+
+      {/* 修正标记 */}
+      {correctionApplied && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded">
+          <span>🔧</span><span>回答已自动修正</span>
         </div>
       )}
 

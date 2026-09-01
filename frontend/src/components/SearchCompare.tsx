@@ -46,37 +46,13 @@ function ScoreBar({ score, maxScore, color }: { score: number; maxScore: number;
   );
 }
 
-function OverlapBadge({ overlap }: { overlap: string }) {
-  const labels: Record<string, string> = {
-    all: '全部命中',
-    vector_keyword: '向量+关键词',
-    vector_hybrid: '向量+混合',
-    keyword_hybrid: '关键词+混合',
-    unique: '仅此模式',
-  };
-  const colors: Record<string, string> = {
-    all: 'bg-emerald-100 text-emerald-700',
-    vector_keyword: 'bg-cyan-100 text-cyan-700',
-    vector_hybrid: 'bg-indigo-100 text-indigo-700',
-    keyword_hybrid: 'bg-orange-100 text-orange-700',
-    unique: 'bg-slate-100 text-slate-500',
-  };
-  return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded ${colors[overlap] || colors.unique}`}>
-      {labels[overlap] || overlap}
-    </span>
-  );
-}
-
 function ResultColumn({
   mode,
   hits,
-  allIds,
   query,
 }: {
   mode: string;
   hits: SearchHit[];
-  allIds: Set<string>;
   query: string;
 }) {
   const meta = MODE_META[mode] || { label: mode, icon: '📋', color: 'slate' };
@@ -99,12 +75,6 @@ function ResultColumn({
           <div className="p-4 text-sm text-slate-400 text-center">无结果</div>
         )}
         {hits.map((hit) => {
-          // 计算重叠标记
-          let overlap = 'unique';
-          const inVec = mode === 'vector';
-          const inKw = mode === 'keyword';
-          const inHy = mode === 'hybrid';
-          // Just show a simple indicator
           return (
             <div key={`${mode}_${hit.rank}`} className="p-3 hover:bg-slate-50 transition-colors">
               <div className="flex items-center gap-1.5 mb-1">
@@ -162,7 +132,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   return highlights;
 }
 
-export default function SearchCompare({ refreshKey }: { refreshKey: number }) {
+export default function SearchCompare() {
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<CompareResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -190,12 +160,6 @@ export default function SearchCompare({ refreshKey }: { refreshKey: number }) {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch();
   };
-
-  // 收集所有结果的 ID
-  const allIds = new Set<string>();
-  if (result) {
-    [...result.vector, ...result.keyword, ...result.hybrid].forEach((h) => allIds.add(h.id));
-  }
 
   return (
     <div className="space-y-4">
@@ -237,9 +201,9 @@ export default function SearchCompare({ refreshKey }: { refreshKey: number }) {
       {/* 三列对比 */}
       {result && (
         <div className="flex gap-3">
-          <ResultColumn mode="vector" hits={result.vector} allIds={allIds} query={result.query} />
-          <ResultColumn mode="keyword" hits={result.keyword} allIds={allIds} query={result.query} />
-          <ResultColumn mode="hybrid" hits={result.hybrid} allIds={allIds} query={result.query} />
+              <ResultColumn mode="vector" hits={result.vector} query={result.query} />
+              <ResultColumn mode="keyword" hits={result.keyword} query={result.query} />
+              <ResultColumn mode="hybrid" hits={result.hybrid} query={result.query} />
         </div>
       )}
 

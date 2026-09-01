@@ -16,11 +16,13 @@ class Reranker:
 
     def __init__(
         self,
-        model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        model_name: str = "BAAI/bge-reranker-v2-m3",
         device: str | None = None,
     ) -> None:
         """
         :param model_name: sentence-transformers CrossEncoder 模型名或路径
+            （中文内容需用多语言/中文重排模型，如 BAAI/bge-reranker-v2-m3；
+              英文内容可用 cross-encoder/ms-marco-MiniLM-L-6-v2）
         :param device: 如 cuda / cpu / mps，None 表示由库自动选择
         """
         self._model_name = model_name

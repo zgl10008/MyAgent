@@ -163,6 +163,12 @@ class SessionRepository:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """追加一条消息，自动更新会话 updated_at 与标题（首条 user 消息）。"""
+        logger.info(
+            "[记忆-写] PG add_message session_id={} role={} content_len={}",
+            session_id,
+            role,
+            len(content or ""),
+        )
         try:
             sess = await self._get_session()
             async with sess:
@@ -193,6 +199,7 @@ class SessionRepository:
                 )
                 sess.add(msg)
                 await sess.commit()
+                logger.info("[记忆-写] PG add_message 提交成功 session_id={}", session_id)
         except Exception as exc:
             logger.warning("写入消息到 PG 失败: {}", exc)
 
@@ -202,6 +209,11 @@ class SessionRepository:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """获取会话消息（按时间升序）。"""
+        logger.info(
+            "[记忆-读] PG get_messages session_id={} limit={}",
+            session_id,
+            limit,
+        )
         try:
             sess = await self._get_session()
             async with sess:
@@ -212,7 +224,7 @@ class SessionRepository:
                     .limit(limit),
                 )
                 rows = result.scalars().all()
-                return [
+                items = [
                     {
                         "role": m.role,
                         "content": m.content,
@@ -220,6 +232,12 @@ class SessionRepository:
                     }
                     for m in rows
                 ]
+                logger.info(
+                    "[记忆-读] PG get_messages 结果 session_id={} count={}",
+                    session_id,
+                    len(items),
+                )
+                return items
         except Exception as exc:
             logger.exception("从 PG 读取消息失败: {}", exc)
             raise
@@ -230,6 +248,11 @@ class SessionRepository:
         limit: int = 20,
     ) -> list[str]:
         """获取最近 N 条消息，格式化为 'role: content' 字符串（供 MemoryLike 使用）。"""
+        logger.info(
+            "[记忆-读] PG get_recent_messages session_id={} limit={}",
+            session_id,
+            limit,
+        )
         try:
             sess = await self._get_session()
             async with sess:
@@ -241,7 +264,13 @@ class SessionRepository:
                 )
                 rows = result.scalars().all()
                 rows.reverse()  # 恢复时间升序
-                return [f"{m.role}: {m.content}" for m in rows]
+                items = [f"{m.role}: {m.content}" for m in rows]
+                logger.info(
+                    "[记忆-读] PG get_recent_messages 结果 session_id={} count={}",
+                    session_id,
+                    len(items),
+                )
+                return items
         except Exception as exc:
             logger.exception("从 PG 读取最近消息失败: {}", exc)
             raise

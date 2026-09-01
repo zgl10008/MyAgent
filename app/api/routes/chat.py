@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import AsyncIterator
 
 from typing import Any
@@ -16,6 +18,8 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.api.upload_validation import validate_upload
+from app.core.domain.policy import get_domain_policy
 from app.core.agent_service import AgentService
 from app.core.intent.recognizer import IntentRecognizer
 from app.core.rag_service import RAGService
@@ -44,6 +48,11 @@ def _get_agent() -> AgentService:
     global _agent_service
     if _agent_service is None:
         _agent_service = AgentService()
+        # 注入 RAGService，使 ModeRouter 能感知知识库状态
+        try:
+            _agent_service.set_rag_service(_get_rag())
+        except Exception:
+            pass  # RAG 服务可能初始化失败，agent 仍可正常工作
     return _agent_service
 
 
@@ -70,6 +79,20 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     try:
         user_text = request.messages[-1].content if request.messages else ""
+        policy = get_domain_policy(request.domain)
+        if policy.is_high_risk(user_text):
+            answer = policy.safety_prefix(user_text)
+            _tracer.end_span(
+                span,
+                result={"mode": "safety", "usage": {"total_steps": 0}},
+            )
+            return ChatResponse(
+                id=str(uuid.uuid4()),
+                model=request.model or get_settings().openai_model,
+                content=answer,
+                trace_id=trace_id,
+                usage={"total_steps": 0},
+            )
         intent = await _intent.recognize(user_text)
         clarify = await _intent.clarify(user_text, intent)
         logger.info(
@@ -81,6 +104,10 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
         router_llm = _build_router()
         messages = [m.model_dump() for m in request.messages]
+        messages.insert(
+            0,
+            {"role": "system", "content": policy.system_prompt},
+        )
         if clarify and intent.confidence < _intent.confidence_threshold:
             messages.append(
                 {
@@ -95,6 +122,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         )
+        content = policy.with_boundary(resp.content, user_text)
 
         _tracer.end_span(
             span,
@@ -104,7 +132,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         return ChatResponse(
             id=str(uuid.uuid4()),
             model=resp.model_id,
-            content=resp.content,
+            content=content,
             trace_id=trace_id,
             usage=resp.usage,
         )
@@ -131,6 +159,16 @@ async def _stream_generator(
         base_url=settings.openai_api_base or None,
     )
     messages = [m.model_dump() for m in request.messages]
+    policy = get_domain_policy(request.domain)
+    user_text = request.messages[-1].content if request.messages else ""
+    if policy.is_high_risk(user_text):
+        yield b"data: " + json.dumps(
+            {"content": policy.safety_prefix(user_text), "trace_id": trace_id},
+            ensure_ascii=False,
+        ).encode() + b"\n\n"
+        yield b"data: " + json.dumps({"done": True}, ensure_ascii=False).encode() + b"\n\n"
+        return
+    messages.insert(0, {"role": "system", "content": policy.system_prompt})
     model = request.model or settings.openai_model
 
     try:
@@ -210,6 +248,7 @@ async def chat_rag(request: RAGChatRequest) -> RAGChatResponse:
             chat_history=history,
             mode=request.mode,
             top_k=request.top_k,
+            domain=request.domain,
         )
 
         return RAGChatResponse(
@@ -234,15 +273,18 @@ async def rag_ingest(
     rag = _get_rag()
     try:
         data = await file.read()
+        filename = validate_upload(file.filename, data)
         count = await rag.ingest_file(
             data=data,
-            filename=file.filename or "unnamed",
+            filename=filename,
             mime_type=file.content_type,
         )
         return RAGIngestResponse(
             chunk_count=count,
             message=f"已处理 {count} 个文本块",
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("rag_ingest 失败: {}", exc)
         raise HTTPException(status_code=422, detail=f"文档处理失败: {exc!s}") from exc
@@ -318,3 +360,44 @@ async def rag_search_compare(req: SearchCompareRequest) -> dict[str, Any]:
     results["hybrid"] = _fmt(hyb)
 
     return results
+
+
+# ==============================================================================
+# 在线负反馈回流（doc 4.3 / P3）
+# ==============================================================================
+
+# 负反馈日志：追加式 JSONL，供 scripts/feedback_to_queries.py 回流成测试 query。
+# 放 data/ 目录（已 gitignore），不入库、不泄露真实用户问题。
+FEEDBACK_FILE = Path(__file__).resolve().parents[3] / "data" / "feedback.jsonl"
+
+
+class RAGFeedbackRequest(BaseModel):
+    """用户对 RAG 回答的反馈（显式点踩/打分，或隐式否定信号）。"""
+    query: str = Field(..., min_length=1, description="触发的用户问题")
+    helpful: bool | None = Field(default=None, description="回答是否有帮助")
+    rating: int | None = Field(default=None, ge=1, le=5, description="1~5 打分")
+    comment: str | None = Field(default=None, description="用户补充说明（如「不对」「答非所问」）")
+    session_id: str | None = Field(default=None, description="会话 ID")
+    kind: str = Field(default="explicit", description="explicit=显式反馈 / implicit=隐式信号（追问·否定）")
+
+
+@router.post("/rag/feedback")
+async def rag_feedback(request: RAGFeedbackRequest) -> dict[str, Any]:
+    """记录用户负反馈，供离线回流到评测测试集（P3 闭环）。"""
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "query": request.query,
+        "helpful": request.helpful,
+        "rating": request.rating,
+        "comment": request.comment,
+        "session_id": request.session_id,
+        "kind": request.kind,
+    }
+    try:
+        FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.exception("写入负反馈日志失败: {}", exc)
+        raise HTTPException(status_code=500, detail=f"反馈记录失败: {exc!s}") from exc
+    return {"status": "recorded", "file": str(FEEDBACK_FILE)}

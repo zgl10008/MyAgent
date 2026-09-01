@@ -1,0 +1,36 @@
+{
+  "_说明": [
+    "由 scripts/feedback_to_queries.py 从 data/feedback.jsonl 提取负反馈生成。",
+    "relevant_ids 为空，需用 reannotate_graded.py（或人工）标注后再进 eval。",
+    "_source=feedback 用于溯源：这是在线真实失败，不是离线设计的 happy path。"
+  ],
+  "queries": [
+    {
+      "query": "高血压急症要不要马上打120",
+      "type": "反馈",
+      "relevant_ids": [],
+      "relevant_keywords": [],
+      "_source": "feedback",
+      "_comment": "答非所问",
+      "_feedback_ts": "2026-08-28T09:10:00+00:00"
+    },
+    {
+      "query": "糖尿病肾病吃哪种降压药不伤肾",
+      "type": "反馈",
+      "relevant_ids": [],
+      "relevant_keywords": [],
+      "_source": "feedback",
+      "_comment": null,
+      "_feedback_ts": "2026-08-28T09:11:00+00:00"
+    },
+    {
+      "query": "高血压患者如何减盐",
+      "type": "反馈",
+      "relevant_ids": [],
+      "relevant_keywords": [],
+      "_source": "feedback",
+      "_comment": "没回答清楚",
+      "_feedback_ts": "2026-08-28T09:13:00+00:00"
+    }
+  ]
+}

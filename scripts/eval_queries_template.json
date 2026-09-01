@@ -1,0 +1,111 @@
+{
+  "_说明": [
+    "这是 RAG 评估测试查询模板。复制为 eval_queries.json 后按实际知识库内容修改。",
+    "relevant_ids: 人工标注的真正相关的 chunk ID（需根据实际检索结果填写）",
+    "relevant_keywords: 用于自动标注的关键词，至少 2 个相关 chunk 包含这些词时判定为相关",
+    "",
+    "详细标注指南见 HOW_TO_ANNOTATE.md"
+  ],
+  "queries": [
+    {
+      "query": "高血压的诊断标准是什么",
+      "relevant_ids": [],
+      "relevant_keywords": ["高血压", "诊断", "血压", "mmHg", "收缩压", "舒张压"]
+    },
+    {
+      "query": "冠心病有哪些常见症状",
+      "relevant_ids": [],
+      "relevant_keywords": ["冠心病", "症状", "胸痛", "胸闷", "心绞痛"]
+    },
+    {
+      "query": "如何预防2型糖尿病",
+      "relevant_ids": [],
+      "relevant_keywords": ["糖尿病", "预防", "血糖", "饮食", "运动", "胰岛素"]
+    },
+    {
+      "query": "他汀类药物的作用机制是什么",
+      "relevant_ids": [],
+      "relevant_keywords": ["他汀", "降脂", "胆固醇", "HMG-CoA", "低密度脂蛋白"]
+    },
+    {
+      "query": "房颤患者如何进行抗凝治疗",
+      "relevant_ids": [],
+      "relevant_keywords": ["房颤", "抗凝", "华法林", "卒中", "INR", "利伐沙班"]
+    },
+    {
+      "query": "心衰的分级标准NYHA",
+      "relevant_ids": [],
+      "relevant_keywords": ["心衰", "NYHA", "分级", "心力衰竭", "心功能"]
+    },
+    {
+      "query": "低盐饮食每日建议摄入量是多少克",
+      "relevant_ids": [],
+      "relevant_keywords": ["低盐", "钠", "摄入", "克", "饮食", "高血压"]
+    },
+    {
+      "query": "心肌梗死的急救措施",
+      "relevant_ids": [],
+      "relevant_keywords": ["心肌梗死", "急救", "溶栓", "PCI", "胸痛", "阿司匹林"]
+    },
+    {
+      "query": "阿司匹林一级预防的适用人群",
+      "relevant_ids": [],
+      "relevant_keywords": ["阿司匹林", "一级预防", "心血管", "风险评估", "出血"]
+    },
+    {
+      "query": "动态血压监测的正常值范围",
+      "relevant_ids": [],
+      "relevant_keywords": ["动态血压", "监测", "24小时", "正常值", "白天", "夜间"]
+    },
+    {
+      "query": "糖尿病肾病分期标准",
+      "relevant_ids": [],
+      "relevant_keywords": ["糖尿病", "肾病", "分期", "肾小球滤过率", "尿蛋白", "eGFR"]
+    },
+    {
+      "query": "支架植入术后用药注意事项",
+      "relevant_ids": [],
+      "relevant_keywords": ["支架", "术后", "双联抗血小板", "氯吡格雷", "用药", "DAPT"]
+    },
+    {
+      "query": "高尿酸血症与心血管疾病的关系",
+      "relevant_ids": [],
+      "relevant_keywords": ["高尿酸", "痛风", "心血管", "风险因素", "尿酸"]
+    },
+    {
+      "query": "脑卒中二级预防策略",
+      "relevant_ids": [],
+      "relevant_keywords": ["脑卒中", "二级预防", "抗血小板", "降压", "他汀"]
+    },
+    {
+      "query": "心电图ST段抬高的临床意义",
+      "relevant_ids": [],
+      "relevant_keywords": ["心电图", "ST段", "抬高", "心肌梗死", "STEMI", "急性"]
+    },
+    {
+      "query": "高血压联合用药方案有哪些",
+      "relevant_ids": [],
+      "relevant_keywords": ["高血压", "联合用药", "CCB", "ACEI", "ARB", "利尿剂"]
+    },
+    {
+      "query": "血脂异常诊断标准和分层",
+      "relevant_ids": [],
+      "relevant_keywords": ["血脂", "异常", "总胆固醇", "甘油三酯", "LDL-C", "HDL-C", "分层"]
+    },
+    {
+      "query": "冠脉造影的主要步骤和注意事项",
+      "relevant_ids": [],
+      "relevant_keywords": ["冠脉造影", "导管", "造影剂", "桡动脉", "股动脉", "注意事项"]
+    },
+    {
+      "query": "心血管疾病危险因素评估方法",
+      "relevant_ids": [],
+      "relevant_keywords": ["心血管", "危险因素", "评估", "Framingham", "SCORE", "风险评估"]
+    },
+    {
+      "query": "慢性心力衰竭的药物治疗原则",
+      "relevant_ids": [],
+      "relevant_keywords": ["心力衰竭", "药物", "β受体阻滞剂", "ACEI", "ARNI", "螺内酯", "SGLT2"]
+    }
+  ]
+}

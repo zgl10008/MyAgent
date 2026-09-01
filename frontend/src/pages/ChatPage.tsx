@@ -13,12 +13,24 @@ import HealthPanel from '../components/HealthPanel';
 let msgIdCounter = 0;
 function nextId() { return `msg_${Date.now()}_${++msgIdCounter}`; }
 
+function newConversationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // UUID v4 fallback for browsers without crypto.randomUUID().
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const value = Math.random() * 16 | 0;
+    const next = char === 'x' ? value : (value & 0x3) | 0x8;
+    return next.toString(16);
+  });
+}
+
 type ChatMode = 'direct' | 'agent' | 'rag';
 
 async function callRag(messages: { role: string; content: string }[]): Promise<RAGChatResponse> {
   const res = await fetch('/api/v1/chat/rag', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, mode: 'hybrid', top_k: 5 }),
+    body: JSON.stringify({ messages, mode: 'hybrid', top_k: 5, domain: 'cardiovascular' }),
   });
   if (!res.ok) { const err = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(err.detail || `HTTP ${res.status}`); }
   return res.json();
@@ -50,11 +62,13 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
   const [ragLoading, setRagLoading] = useState(false);
   const [ragChunks, setRagChunks] = useState(0);
   const [documents, setDocuments] = useState<{ filename: string; uploaded_at: number }[]>([]);
+  const [lastQuery, setLastQuery] = useState('');
+  const [ragFeedbackSent, setRagFeedbackSent] = useState<null | boolean>(null);
 
   const modeLabel: Record<ChatMode, { icon: string; label: string; desc: string }> = {
     direct: { icon: '💬', label: '直连', desc: '直接调用大模型' },
     agent:  { icon: '🤖', label: 'Agent', desc: '多步推理 · 工具调用 · 反思质检' },
-    rag:    { icon: '📚', label: 'RAG', desc: '医学知识检索 · 指南引用' },
+    rag:    { icon: '📚', label: 'RAG', desc: '文档知识检索 · 引用回答' },
   };
 
   // 加载会话历史
@@ -93,10 +107,12 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
 
   const handleSend = useCallback(async (text: string) => {
     const userMsg: DisplayMessage = { id: nextId(), role: 'user', content: text, timestamp: Date.now() };
+    setLastQuery(text);
+    setRagFeedbackSent(null);
     const assistantMsg: DisplayMessage = { id: nextId(), role: 'assistant', content: '', timestamp: Date.now() };
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setLoading(true);
-    const convId = sessionId || `session_${Date.now()}`;
+    const convId = sessionId || newConversationId();
     if (!sessionId) onSessionChange(convId);
     const actualMode = autoMode ? resolveMode(text, ragChunks > 0) : mode;
     setResolvedMode(actualMode);
@@ -107,7 +123,7 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
         setAgentLoading(true); setAgentSteps([]); setAgentResult(null);
         const resp = await agentChat({
           messages: [...history, { role: 'user' as const, content: text }],
-          temperature: 0.7, agent_mode: 'react', conversation_id: convId,
+          temperature: 0.7, agent_mode: 'auto', conversation_id: convId, domain: 'cardiovascular',
         });
         setAgentResult(resp); setAgentSteps(resp.steps);
         setMessages((prev) => prev.map((m) => m.id === assistantMsg.id ? { ...m, content: resp.content } : m));
@@ -119,8 +135,12 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
       } else {
         const res = await fetch('/api/v1/chat', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: [...history, { role: 'user', content: text }], temperature: 0.7 }),
+          body: JSON.stringify({ messages: [...history, { role: 'user', content: text }], temperature: 0.7, domain: 'cardiovascular' }),
         });
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => null);
+          throw new Error((errBody && errBody.detail) || `请求失败 (${res.status})`);
+        }
         const data = await res.json();
         setMessages((prev) => prev.map((m) => m.id === assistantMsg.id ? { ...m, content: data.content } : m));
       }
@@ -141,6 +161,17 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
     } catch (err: any) { alert(`上传失败: ${err.message}`); }
   }, []);
 
+  const sendFeedback = useCallback(async (helpful: boolean) => {
+    if (!lastQuery || ragFeedbackSent !== null) return;
+    try {
+      await fetch('/api/v1/rag/feedback', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: lastQuery, helpful, session_id: sessionId, kind: 'explicit' }),
+      });
+      setRagFeedbackSent(helpful);
+    } catch { /* 反馈失败不打断用户 */ }
+  }, [lastQuery, ragFeedbackSent, sessionId]);
+
   const intentLabelMap: Record<string, string> = {
     '知识问答': '📖 知识问答', '实时搜索': '🔍 实时查询', '数学计算': '🧮 数值计算',
     '文档管理': '📄 档案管理', '闲聊对话': '💬 日常交流',
@@ -156,7 +187,7 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
         <div className="border-b border-emerald-200 px-6 py-3 bg-white flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-emerald-800">🩺 健康咨询</h2>
-            <p className="text-xs text-slate-400 mt-0.5">描述您的身体感受或健康问题，Agent 将结合指南给出建议</p>
+            <p className="text-xs text-slate-400 mt-0.5">描述问题或询问已上传文档，Agent 将结合领域策略回答</p>
           </div>
           <div className="flex items-center gap-2">
             <span className={`text-xs px-2 py-1 rounded-full font-medium ${
@@ -182,16 +213,39 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
           </div>
         </div>
         <MessageList messages={messages} loading={loading} />
-        <ChatInput onSend={handleSend} disabled={loading} placeholder="描述您的身体感受或健康问题..." />
+        <ChatInput onSend={handleSend} disabled={loading} placeholder="描述问题或询问已上传文档..." />
       </div>
 
       <div className="w-80 border-l border-emerald-200 bg-white/70 overflow-y-auto p-4 shrink-0">
         {(resolvedMode || mode) === 'agent' && (
           <div className="space-y-4">
+            {(agentResult?.agent_mode === 'safety' || agentResult?.agent_mode === 'clarify') && (
+              <div className={`rounded-xl border p-4 ${agentResult.agent_mode === 'safety' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                <p className={`text-xs font-semibold mb-1 ${agentResult.agent_mode === 'safety' ? 'text-red-600' : 'text-amber-600'}`}>
+                  {agentResult.agent_mode === 'safety' ? '🚨 医疗安全拦截' : '❓ 风险澄清'}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {agentResult.agent_mode === 'safety'
+                    ? '该问题涉及急诊风险，已停止进入工具调用链'
+                    : '需确认症状是否正在发作'}
+                </p>
+              </div>
+            )}
             {agentResult?.intent && <IntentBadge intent={agentResult.intent} labelMap={intentLabelMap} />}
-            {agentResult && <ToolCallLog toolCalls={agentResult.tool_calls} reflectionScore={agentResult.reflection_score} degraded={agentResult.degraded} medical />}
+            {agentResult && (
+              <ToolCallLog
+                toolCalls={agentResult.tool_calls}
+                reflectionScore={agentResult.reflection_score}
+                degraded={agentResult.degraded}
+                medical
+                hallucinationDetected={agentResult.hallucination_detected}
+                completenessNotes={agentResult.completeness_notes}
+                correctionApplied={agentResult.correction_applied}
+                reflectionWarnings={agentResult.reflection_warnings}
+              />
+            )}
             <AgentSteps steps={agentSteps} loading={agentLoading} medical />
-            {!agentLoading && agentSteps.length === 0 && (
+            {!agentLoading && agentSteps.length === 0 && agentResult?.agent_mode !== 'safety' && agentResult?.agent_mode !== 'clarify' && (
               <div className="text-center py-8"><p className="text-3xl mb-2">🫀</p><p className="text-sm text-slate-400">Agent 分析过程将在此展示</p></div>
             )}
           </div>
@@ -199,13 +253,31 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
         {(resolvedMode || mode) === 'rag' && (
           <div className="space-y-4">
             <div className="bg-white rounded-xl border border-emerald-200 p-4">
-              <h3 className="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wider">📚 医学知识库</h3>
+              <h3 className="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wider">📚 文档知识库</h3>
               <div className="flex items-center gap-2"><span className="text-2xl">📚</span>
                 <div><p className="text-sm font-medium text-slate-700">{ragChunks > 0 ? `${ragChunks} 个文本块` : '暂无内容'}</p>
-                <p className="text-xs text-slate-400">{ragChunks > 0 ? '可进行指南知识问答' : '上传医学文档后开始'}</p></div>
+                <p className="text-xs text-slate-400">{ragChunks > 0 ? '可进行文档知识问答' : '上传文档后开始'}</p></div>
               </div>
             </div>
             <RAGContext contexts={ragResult?.contexts || []} citations={ragResult?.citations || []} loading={ragLoading} />
+            {ragResult && !ragLoading && (
+              <div className="bg-white rounded-xl border border-emerald-200 p-4">
+                <h3 className="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wider">👍 反馈</h3>
+                {ragFeedbackSent === null ? (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-slate-400">这个回答有帮助吗？</span>
+                    <button onClick={() => sendFeedback(true)}
+                      className="text-xs px-2.5 py-1 rounded-md border border-emerald-200 text-emerald-600 hover:bg-emerald-50 transition-colors">👍 有帮助</button>
+                    <button onClick={() => sendFeedback(false)}
+                      className="text-xs px-2.5 py-1 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors">👎 没帮助</button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400">
+                    已记录「{ragFeedbackSent ? '有帮助' : '没帮助'}」，用于改进评测与知识库。
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
         {(resolvedMode || mode) === 'direct' && (

@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-# 默认异步 PostgreSQL（需安装 asyncpg）
-_default_url = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_db"
+# 不再内置默认凭据：调用方必须显式传入 database_url（来自 settings/.env）
+_default_url: str | None = None
 
 
 def normalize_async_database_url(url: str) -> str:
@@ -35,7 +35,9 @@ def normalize_async_database_url(url: str) -> str:
 
 def init_engine(database_url: str | None = None, **engine_kwargs: Any) -> AsyncEngine:
     """创建异步引擎（应用启动时调用一次）。"""
-    url = normalize_async_database_url(database_url or _default_url)
+    if not database_url:
+        raise ValueError("必须提供 database_url；未配置 DATABASE_URL 时应跳过数据库初始化")
+    url = normalize_async_database_url(database_url)
     kwargs = {"echo": False, "pool_pre_ping": True}
     kwargs.update(engine_kwargs)
     engine = create_async_engine(url, **kwargs)

@@ -33,6 +33,11 @@ INTENT_CLASSIFY_PROMPT = """你是意图分类专家。分析用户输入，输�
 - 文档管理：上传、下载、删除文档
 - 闲聊对话：问候、感谢、日常寒暄
 
+## 多轮规则
+- 若提供了对话历史且当前输入是追问/指代（如"那它呢？""还有吗？""这个药呢？"），
+  必须结合历史推断真实意图，不要按字面单轮分类。
+- 若没有对话历史或输入本身完整，按单轮分类。
+
 ## 槽位提取
 - 如涉及数字，放入 numbers 数组
 - 如涉及文档，放入 doc_action（upload/delete/list）
@@ -161,11 +166,23 @@ class IntentRecognizer:
         """是否启用 LLM 分类模式。"""
         return self._llm is not None
 
-    async def _llm_classify(self, query: str) -> IntentResult:
-        """用 LLM 做意图分类。"""
+    async def _llm_classify(
+        self,
+        query: str,
+        history: list[str] | None = None,
+    ) -> IntentResult:
+        """用 LLM 做意图分类；history 用于多轮追问/指代消解。"""
+        user_content = f"请对以下输入做意图分类：\n{query}"
+        if history:
+            hist_block = "\n".join(f"  {item}" for item in history)
+            user_content = (
+                "请结合对话历史对当前输入做意图分类。\n"
+                f"[对话历史]\n{hist_block}\n\n"
+                f"[当前输入]\n{query}"
+            )
         messages: list[dict[str, str]] = [
             {"role": "system", "content": INTENT_CLASSIFY_PROMPT},
-            {"role": "user", "content": f"请对以下输入做意图分类：\n{query}"},
+            {"role": "user", "content": user_content},
         ]
         try:
             raw = await self._llm.acomplete(messages, temperature=0.1)
@@ -195,13 +212,24 @@ class IntentRecognizer:
         )
 
     async def recognize(self, query: str, context: dict | None = None) -> IntentResult:
-        """识别用户意图。优先 LLM 分类，失败降级关键词规则。"""
-        _ = context
+        """识别用户意图。优先 LLM 分类，失败降级关键词规则。
+
+        context 可携带历史上下文（方案 A）：
+            {"history": ["user: ...", "assistant: ...", ...]}
+        历史会注入 LLM 分类提示词，用于多轮追问/指代消解。
+        """
+        history: list[str] | None = None
+        if context:
+            raw = context.get("history")
+            if isinstance(raw, list):
+                history = [str(item) for item in raw if str(item).strip()]
+            elif isinstance(raw, str) and raw.strip():
+                history = [raw.strip()]
 
         # ── 尝试 LLM 分类 ──
         if self._llm is not None:
             try:
-                result = await self._llm_classify(query)
+                result = await self._llm_classify(query, history=history)
                 logger.info(
                     "LLM 意图 query_preview={} -> {} conf={:.2f} reason={}",
                     query[:80],

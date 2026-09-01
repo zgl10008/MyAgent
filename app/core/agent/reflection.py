@@ -154,3 +154,291 @@ class ReflectionAgent:
             "suggest_retry": retry,
             "min_quality_threshold": self.min_quality_to_pass,
         }
+
+
+# ==============================================================================
+# 自我修正器：对中等质量回答进行单次 LLM 修复，比完整重试更便宜
+# ==============================================================================
+
+SELF_CORRECTION_PROMPT = """你是答案修正专家。请根据审查意见修正助手回答。
+
+## 审查意见
+{reflection_feedback}
+
+## 原始回答
+{original_answer}
+
+## 外部证据（用于核实和修正）
+{evidence}
+
+请直接输出修正后的完整回答，不要输出 JSON 或其他格式。
+修正规则：
+- 移除审查指出的虚构事实和无依据断言
+- 补充遗漏的关键要点
+- 保留正确的部分不做改动
+- 修正后不得新增虚构事实
+- 如果原始回答基本正确，只需微调"""
+
+
+class SelfCorrector:
+    """单次 LLM 调用的答案修正器。
+
+    用于质量分在 60-79 区间的回答：比重新跑 Agent 便宜得多（1 次 LLM vs 完整 ReAct 循环），
+    但只能修复局部问题（措辞、幻觉片段、遗漏点），无法补充需要工具调用的信息。
+    """
+
+    def __init__(self, llm: ReflectionLLM) -> None:
+        self._llm = llm
+
+    async def correct(
+        self,
+        original_answer: str,
+        reflection: "ReflectionReport",
+        evidence: list[str],
+    ) -> str:
+        """根据反思报告修正回答，返回修正后的文本。"""
+        feedback_parts: list[str] = []
+
+        if reflection.hallucination_reasons:
+            feedback_parts.append(
+                "疑似幻觉（需核实或移除）：" + "；".join(reflection.hallucination_reasons)
+            )
+        if reflection.suggestions:
+            feedback_parts.append(
+                "改进建议：" + "；".join(reflection.suggestions)
+            )
+        if not reflection.is_complete:
+            feedback_parts.append(
+                "完整性不足（需补充）：" + reflection.completeness_notes
+            )
+
+        if not feedback_parts:
+            return original_answer
+
+        ev_block = "\n".join(f"- {e}" for e in evidence) if evidence else "（无外部证据）"
+
+        prompt = SELF_CORRECTION_PROMPT.format(
+            reflection_feedback="\n".join(feedback_parts),
+            original_answer=original_answer,
+            evidence=ev_block,
+        )
+
+        try:
+            raw = await self._llm.acomplete(
+                [{"role": "user", "content": prompt}],
+                temperature=0.2,
+            )
+            corrected = raw if isinstance(raw, str) else str(raw)
+            return corrected.strip() or original_answer
+        except Exception:
+            logger.exception("自我修正失败，退回原始回答")
+            return original_answer
+
+
+# ==============================================================================
+# 重试上下文：携带前一轮反思的反馈，注入 Agent 重试提示
+# ==============================================================================
+
+@dataclass
+class RetryContext:
+    """携带反思反馈的 Agent 重试上下文。"""
+
+    hallucination_reasons: list[str]
+    missing_points: str
+    suggestions: list[str]
+    previous_score: int
+
+    def to_hint(self) -> str:
+        """生成注入 Agent 的反思反馈提示。"""
+        parts: list[str] = []
+        if self.hallucination_reasons:
+            parts.append(
+                "【重要】上一轮回答存在以下疑似虚构内容，请避免重复："
+                + "；".join(self.hallucination_reasons)
+            )
+        if self.missing_points:
+            parts.append(
+                "【重要】上一轮遗漏了以下要点，请补充："
+                + self.missing_points
+            )
+        if self.suggestions:
+            parts.append(
+                "改进方向：" + "；".join(self.suggestions)
+            )
+        if self.previous_score < 40:
+            parts.append(
+                "上一轮质量评分仅 {}/100，请重新组织思路，确保回答准确完整。".format(
+                    self.previous_score
+                )
+            )
+        return "\n".join(parts)
+
+    @classmethod
+    def from_reflection(cls, report: "ReflectionReport") -> "RetryContext":
+        """从反思报告构建重试上下文。"""
+        return cls(
+            hallucination_reasons=list(report.hallucination_reasons),
+            missing_points=report.completeness_notes,
+            suggestions=list(report.suggestions),
+            previous_score=report.quality_score,
+        )
+
+
+# ==============================================================================
+# 反思闭环：评估 → 决策 → 修正/重试 → 再评估
+# ==============================================================================
+
+@dataclass
+class ReflectionLoopResult:
+    """反思闭环的最终结果。"""
+
+    final_answer: str
+    final_score: int
+    reflection_report: "ReflectionReport"
+    corrections_made: int
+    action_taken: str  # "none" | "self_correction" | "retry_needed"
+    warnings: list[str]
+
+    # 仅 action_taken == "retry_needed" 时有效
+    retry_context: "RetryContext | None" = None
+
+
+class ReflectionLoop:
+    """反思驱动的质量控制循环。
+
+    流程：反思 → 分级响应
+      score >= 80  → 直接通过
+      score 60-79  → 自我修正（单次 LLM 修复）
+      score < 60   → 返回 RetryContext，由编排器重新执行 Agent
+    """
+
+    PASS_THRESHOLD = 80
+    CORRECTION_THRESHOLD = 60
+
+    def __init__(
+        self,
+        reflection_agent: "ReflectionAgent",
+        self_corrector: "SelfCorrector",
+    ) -> None:
+        self._reflect = reflection_agent
+        self._correct = self_corrector
+
+    async def evaluate_and_improve(
+        self,
+        user_query: str,
+        answer: str,
+        steps: list[dict],
+        allow_retry: bool = True,
+    ) -> ReflectionLoopResult:
+        """评估回答质量，必要时触发修正或标记需要重试。
+
+        allow_retry=False 时，低质量回答降级为单次自我修正，
+        而不是返回 retry_needed（用于中风险任务，避免重跑整个 Agent）。
+        """
+        from app.core.agent.evidence_collector import EvidenceCollector
+
+        collector = EvidenceCollector()
+        evidence = collector.collect(steps)
+
+        trace_summary = str([
+            s.get("phase") or s.get("subtask_id", "")
+            for s in steps[-20:]
+        ])
+
+        # 第一次反思
+        report = await self._reflect.reflect(
+            user_query,
+            answer,
+            evidence_snippets=evidence,
+            trace_summary=trace_summary,
+        )
+        best_answer = answer
+        best_score = report.quality_score
+        best_report = report
+        corrections = 0
+        warnings: list[str] = []
+
+        # ── 高质量：直接通过 ──
+        if best_score >= self.PASS_THRESHOLD:
+            return ReflectionLoopResult(
+                final_answer=best_answer,
+                final_score=best_score,
+                reflection_report=best_report,
+                corrections_made=0,
+                action_taken="none",
+                warnings=[],
+            )
+
+        # ── 中等质量：自我修正 ──
+        if best_score >= self.CORRECTION_THRESHOLD:
+            corrected = await self._correct.correct(answer, report, evidence)
+            if corrected != answer:
+                corrections = 1
+
+            # 修正后再反思
+            report2 = await self._reflect.reflect(
+                user_query,
+                corrected,
+                evidence_snippets=evidence,
+            )
+            if report2.quality_score > best_score:
+                best_answer = corrected
+                best_score = report2.quality_score
+                best_report = report2
+
+            if report.likely_hallucination:
+                warnings.append("回答经自动修正，可能存在不准确内容，建议核实")
+
+            return ReflectionLoopResult(
+                final_answer=best_answer,
+                final_score=best_score,
+                reflection_report=best_report,
+                corrections_made=corrections,
+                action_taken="self_correction",
+                warnings=warnings,
+            )
+
+        # ── 低质量 ──
+        # allow_retry=False（中风险 R2）：降级为单次自我修正，不重跑 Agent。
+        if not allow_retry:
+            corrected = await self._correct.correct(answer, report, evidence)
+            if corrected != answer:
+                corrections = 1
+
+            # 修正后再反思
+            report2 = await self._reflect.reflect(
+                user_query,
+                corrected,
+                evidence_snippets=evidence,
+            )
+            if report2.quality_score > best_score:
+                best_answer = corrected
+                best_score = report2.quality_score
+                best_report = report2
+
+            if report.likely_hallucination:
+                warnings.append("回答经自动修正，可能存在不准确内容，建议核实")
+
+            return ReflectionLoopResult(
+                final_answer=best_answer,
+                final_score=best_score,
+                reflection_report=best_report,
+                corrections_made=corrections,
+                action_taken="self_correction",
+                warnings=warnings,
+            )
+
+        # ── 低质量：需要完整重试（高风险 R3）──
+        retry_ctx = RetryContext.from_reflection(report)
+        if report.likely_hallucination and report.quality_score < 40:
+            warnings.append("回答可能包含不准确信息，系统已尝试重新生成")
+
+        return ReflectionLoopResult(
+            final_answer=best_answer,
+            final_score=best_score,
+            reflection_report=best_report,
+            corrections_made=0,
+            action_taken="retry_needed",
+            warnings=warnings,
+            retry_context=retry_ctx,
+        )

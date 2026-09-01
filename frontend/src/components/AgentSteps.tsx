@@ -24,9 +24,9 @@ function ThoughtCard({ thought, medical }: { thought: string; medical?: boolean 
     <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-2">
       <div className="flex items-start gap-2">
         <span className="text-sm mt-0.5">💭</span>
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-blue-600 mb-0.5">{label}</p>
-          <p className="text-sm text-slate-700">{thought}</p>
+          <p className="text-sm text-slate-700 break-words">{thought}</p>
         </div>
       </div>
     </div>
@@ -62,9 +62,9 @@ function ObservationCard({ observation, medical }: { observation: string; medica
     <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-2">
       <div className="flex items-start gap-2">
         <span className="text-sm mt-0.5">👁️</span>
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-green-600 mb-0.5">{label}</p>
-          <p className="text-sm text-slate-700 font-mono text-xs bg-green-100/50 p-1.5 rounded">
+          <p className="text-sm text-slate-700 font-mono text-xs bg-green-100/50 p-1.5 rounded break-all whitespace-pre-wrap">
             {observation.length > 200 ? observation.slice(0, 200) + '...' : observation}
           </p>
         </div>
@@ -79,7 +79,10 @@ function ErrorCard({ error }: { error: string }) {
     <div className="bg-red-50 border border-red-200 rounded-lg p-3">
       <div className="flex items-start gap-2">
         <span className="text-sm mt-0.5">⚠️</span>
-        <div><p className="text-xs font-medium text-red-600 mb-0.5">异常</p><p className="text-sm text-red-700">{error}</p></div>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-red-600 mb-0.5">异常</p>
+          <p className="text-sm text-red-700 break-words">{error}</p>
+        </div>
       </div>
     </div>
   );

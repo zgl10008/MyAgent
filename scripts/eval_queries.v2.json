@@ -1,0 +1,649 @@
+{
+  "_说明": [
+    "由 scripts/reannotate_queries.py 用 LLM-as-judge 重标注生成。",
+    "数据源 = doc_chunks_full.json；候选池 = bge-m3 向量/BM25/RRF 三路召回 Top-20 并集。"
+  ],
+  "queries": [
+    {
+      "query": "中国高血压的诊断标准是什么",
+      "type": "事实型",
+      "relevant_ids": [
+        "d45aaa9c-94e7-4fae-81e2-39d4b05eef4b",
+        "0570f89a-6dfc-4059-9960-4c2a6699a242",
+        "63f4c369-ed06-4350-b8b5-313201864f85",
+        "eb6498a0-19cb-4acf-a6b6-ff8707fbc015"
+      ],
+      "relevant_keywords": [
+        "高血压",
+        "诊断",
+        "140",
+        "90",
+        "mmHg",
+        "非同日",
+        "3次",
+        "家庭血压",
+        "135",
+        "85"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "23b1713d-0efe-4556-b843-ac0e2c33bd62",
+        "e9160caf-441b-4bd0-8651-349b915edd62"
+      ]
+    },
+    {
+      "query": "我国成年人高血压的知晓率、治疗率和控制率",
+      "type": "事实型",
+      "relevant_ids": [
+        "c2242dc3-25e1-4294-a621-db7ce2aafdd1"
+      ],
+      "relevant_keywords": [
+        "知晓率",
+        "治疗率",
+        "控制率",
+        "41",
+        "34.9",
+        "11.0",
+        "2018",
+        "三率"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "c2242dc3-25e1-4294-a621-db7ce2aafdd1"
+      ]
+    },
+    {
+      "query": "高血压的危险因素有哪些",
+      "type": "事实型",
+      "relevant_ids": [
+        "c002fcc0-e442-4832-9464-25e796bad15f",
+        "06b7196f-4898-4d33-94ce-3ccf5b016cfc",
+        "8a869420-062a-4629-9fb8-046f2b0bc7e3"
+      ],
+      "relevant_keywords": [
+        "危险因素",
+        "高钠",
+        "超重",
+        "肥胖",
+        "吸烟",
+        "饮酒",
+        "年龄",
+        "遗传",
+        "精神"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "433a9911-3ebe-427a-ae39-e56c4fff39b4",
+        "cf9252fd-d5d6-42ca-a2d0-c8803445f95c"
+      ]
+    },
+    {
+      "query": "2024版高血压防治指南有哪些主要更新",
+      "type": "事实型",
+      "relevant_ids": [
+        "432297cc-d557-49f1-b767-06adb2c8471b",
+        "b4606fdd-349f-4813-9212-fab3aa3ef5f5",
+        "c108df50-1e63-4802-9056-f731e4075584",
+        "4cea5017-7423-4890-9750-d082226b670f",
+        "edb6134f-b278-4253-b095-bd99479f81c6",
+        "edb1e48f-edef-499e-acdf-b7c98dce24af"
+      ],
+      "relevant_keywords": [
+        "2024",
+        "修订",
+        "更新",
+        "指南",
+        "高血压",
+        "防治"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "432297cc-d557-49f1-b767-06adb2c8471b",
+        "4cea5017-7423-4890-9750-d082226b670f",
+        "b4606fdd-349f-4813-9212-fab3aa3ef5f5",
+        "c108df50-1e63-4802-9056-f731e4075584",
+        "edb1e48f-edef-499e-acdf-b7c98dce24af",
+        "edb6134f-b278-4253-b095-bd99479f81c6"
+      ]
+    },
+    {
+      "query": "家庭血压监测的诊断标准和测量方法",
+      "type": "事实型",
+      "relevant_ids": [
+        "e21724d7-2b8f-4648-bcfe-a383415073e3",
+        "a9c84ed1-34de-45ed-bd28-2b0271dc09b0",
+        "313f9863-1ef3-4d7e-9f67-a1e5e5ef880e",
+        "0570f89a-6dfc-4059-9960-4c2a6699a242",
+        "eb6498a0-19cb-4acf-a6b6-ff8707fbc015"
+      ],
+      "relevant_keywords": [
+        "家庭血压",
+        "监测",
+        "135",
+        "85",
+        "连续",
+        "5-7",
+        "测量",
+        "上臂"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "高血压患者如何进行生活方式干预",
+      "type": "多跳",
+      "relevant_ids": [
+        "35f36e27-9ed3-4909-95a6-5af060d48d57",
+        "d44f084b-834e-46e5-91ab-6aa0427b6b59",
+        "cfe50f76-fa94-4679-869e-1431cec6a7f9",
+        "8a869420-062a-4629-9fb8-046f2b0bc7e3",
+        "f4411226-8687-436c-aeb2-8aed9e63bf85",
+        "06b7196f-4898-4d33-94ce-3ccf5b016cfc",
+        "8e18379b-ae0c-4948-8be5-33aac9a01012",
+        "220f9f63-7478-4561-951e-8467778aecf9",
+        "8c2673da-8979-4e6d-939f-314d5150c500",
+        "ad088a68-81f7-456d-b061-f48de687648b",
+        "87ff4cb1-c5a6-4dcb-8147-bc71e7a714c1",
+        "e1cf2c27-c303-45ef-9b2d-61e185cb20e9",
+        "4fe58f9a-1f9c-4736-a489-072ca2fe7bec",
+        "fc67abe3-3481-4b9a-9a10-5957b1e91bb2"
+      ],
+      "relevant_keywords": [
+        "生活方式",
+        "干预",
+        "饮食",
+        "运动",
+        "限盐",
+        "减重",
+        "戒烟",
+        "限酒",
+        "有氧"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "abbd0347-e204-4044-b16f-96659db30a0c"
+      ]
+    },
+    {
+      "query": "高血压患者推荐的运动方式和频率",
+      "type": "事实型",
+      "relevant_ids": [
+        "8e18379b-ae0c-4948-8be5-33aac9a01012"
+      ],
+      "relevant_keywords": [
+        "运动",
+        "中等强度",
+        "有氧",
+        "抗阻",
+        "每周",
+        "150",
+        "分钟",
+        "30"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "高血压患者的饮食建议限盐多少",
+      "type": "事实型",
+      "relevant_ids": [
+        "06b7196f-4898-4d33-94ce-3ccf5b016cfc",
+        "87ff4cb1-c5a6-4dcb-8147-bc71e7a714c1"
+      ],
+      "relevant_keywords": [
+        "限盐",
+        "钠",
+        "6",
+        "克",
+        "低盐",
+        "DASH",
+        "钾",
+        "饮食"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "12c9447d-2485-4f4b-b67e-aa9d80b5d945",
+        "be72313f-eac2-4da9-b8c2-147e5d5e27a4"
+      ]
+    },
+    {
+      "query": "什么是高血压急症",
+      "type": "事实型",
+      "relevant_ids": [],
+      "relevant_keywords": [
+        "高血压急症",
+        "急症",
+        "180",
+        "120",
+        "靶器官",
+        "损害",
+        "急性"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "高血压急症的处理原则",
+      "type": "多跳",
+      "relevant_ids": [],
+      "relevant_keywords": [
+        "高血压急症",
+        "处理",
+        "降压",
+        "静脉",
+        "靶器官",
+        "急性",
+        "降压目标"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "高血压急症常用的静脉降压药物",
+      "type": "多跳",
+      "relevant_ids": [],
+      "relevant_keywords": [
+        "静脉",
+        "降压",
+        "硝普钠",
+        "乌拉地尔",
+        "硝酸甘油",
+        "尼卡地平",
+        "拉贝洛尔"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "糖尿病患者中高血压的患病率",
+      "type": "事实型",
+      "relevant_ids": [
+        "cf9252fd-d5d6-42ca-a2d0-c8803445f95c",
+        "05eba65d-0864-49ed-bf20-62b0fedc1eab",
+        "ffe3288f-629b-4cd9-be58-69497b8436f3"
+      ],
+      "relevant_keywords": [
+        "糖尿病",
+        "高血压",
+        "患病率",
+        "66.3",
+        "合并症",
+        "心血管"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "05eba65d-0864-49ed-bf20-62b0fedc1eab",
+        "cf9252fd-d5d6-42ca-a2d0-c8803445f95c",
+        "ffe3288f-629b-4cd9-be58-69497b8436f3"
+      ]
+    },
+    {
+      "query": "糖尿病合并高血压的血压控制目标",
+      "type": "事实型",
+      "relevant_ids": [
+        "0c2a4a1e-d0a0-41f9-a77d-425a7f81225d"
+      ],
+      "relevant_keywords": [
+        "糖尿病",
+        "血压",
+        "目标",
+        "120",
+        "80",
+        "130",
+        "强化",
+        "BPROAD"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "05eba65d-0864-49ed-bf20-62b0fedc1eab",
+        "964bd2da-09a6-4e56-891f-46dc512f0e46",
+        "9ec4650f-8497-4cfa-9e9a-9d50b797e424",
+        "ba513e6c-841e-4f1d-96c3-c0d4b1029a71",
+        "cf9252fd-d5d6-42ca-a2d0-c8803445f95c"
+      ]
+    },
+    {
+      "query": "糖尿病患者的降压药物首选什么",
+      "type": "多跳",
+      "relevant_ids": [
+        "0c2a4a1e-d0a0-41f9-a77d-425a7f81225d"
+      ],
+      "relevant_keywords": [
+        "糖尿病",
+        "降压",
+        "ACEI",
+        "ARB",
+        "ARNI",
+        "首选",
+        "药物"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "SGLT2抑制剂对糖尿病合并高血压患者有哪些获益",
+      "type": "多跳",
+      "relevant_ids": [
+        "614e69db-f407-4375-9d08-4e5e62a7fc4f",
+        "14ed3f51-6581-42f6-b401-3ba5d6328d17"
+      ],
+      "relevant_keywords": [
+        "SGLT2",
+        "糖尿病",
+        "心血管",
+        "心衰",
+        "肾脏",
+        "血压",
+        "eGFR",
+        "30"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "05eba65d-0864-49ed-bf20-62b0fedc1eab",
+        "9ec4650f-8497-4cfa-9e9a-9d50b797e424",
+        "a11fa872-f9c3-498f-946b-a683b40bbad5",
+        "c56f736e-4b06-4dcd-8ed5-ca7224f25328",
+        "cb6febf6-d94a-4c89-8796-712d14535e75",
+        "cf9252fd-d5d6-42ca-a2d0-c8803445f95c"
+      ]
+    },
+    {
+      "query": "糖尿病合并高血压的中医辨证分型",
+      "type": "多跳",
+      "relevant_ids": [
+        "b449e194-ac8f-4fef-8c78-ff8083f51e78",
+        "8c2673da-8979-4e6d-939f-314d5150c500"
+      ],
+      "relevant_keywords": [
+        "中医",
+        "辨证",
+        "分型",
+        "证型",
+        "阴虚",
+        "阳亢",
+        "痰湿",
+        "气血"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "中西医结合治疗糖尿病合并高血压的优势",
+      "type": "多跳",
+      "relevant_ids": [
+        "6178fc4e-5d61-4b0a-8252-bd995ccbe4a5",
+        "fa91defa-f35c-498c-bafe-87d9e6f57162",
+        "2cf70637-6d7c-440c-b9ef-d6265cbaeb72",
+        "798b0198-9efa-46ef-b39e-4feed7028b8c",
+        "cf9252fd-d5d6-42ca-a2d0-c8803445f95c",
+        "05eba65d-0864-49ed-bf20-62b0fedc1eab",
+        "ba513e6c-841e-4f1d-96c3-c0d4b1029a71"
+      ],
+      "relevant_keywords": [
+        "中西医结合",
+        "中医",
+        "西医",
+        "优势",
+        "协同",
+        "糖尿病",
+        "高血压"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "05eba65d-0864-49ed-bf20-62b0fedc1eab",
+        "2cf70637-6d7c-440c-b9ef-d6265cbaeb72",
+        "6178fc4e-5d61-4b0a-8252-bd995ccbe4a5",
+        "798b0198-9efa-46ef-b39e-4feed7028b8c",
+        "ba513e6c-841e-4f1d-96c3-c0d4b1029a71",
+        "cf9252fd-d5d6-42ca-a2d0-c8803445f95c",
+        "fa91defa-f35c-498c-bafe-87d9e6f57162"
+      ]
+    },
+    {
+      "query": "糖尿病合并高血压常用的中药方剂有哪些",
+      "type": "多跳",
+      "relevant_ids": [],
+      "relevant_keywords": [
+        "中药",
+        "方剂",
+        "天麻",
+        "钩藤",
+        "六味地黄",
+        "丹参",
+        "汤",
+        "丸"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "中医对高血压病因病机的认识",
+      "type": "事实型",
+      "relevant_ids": [
+        "b449e194-ac8f-4fef-8c78-ff8083f51e78",
+        "8c2673da-8979-4e6d-939f-314d5150c500"
+      ],
+      "relevant_keywords": [
+        "中医",
+        "病因",
+        "病机",
+        "眩晕",
+        "头痛",
+        "肝",
+        "肾",
+        "阴阳",
+        "气血"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "ffe3288f-629b-4cd9-be58-69497b8436f3"
+      ]
+    },
+    {
+      "query": "糖尿病肾病合并高血压如何选择降压药",
+      "type": "多跳",
+      "relevant_ids": [
+        "82b742ea-e133-4895-a098-d386ec4be6fa",
+        "3ce98ad9-d4b0-47c1-b19b-42db975e29df",
+        "2db242e6-30d9-48b7-8cda-b224957a4e55",
+        "a9c84ed1-34de-45ed-bd28-2b0271dc09b0"
+      ],
+      "relevant_keywords": [
+        "糖尿病",
+        "肾病",
+        "降压",
+        "ACEI",
+        "ARB",
+        "蛋白尿",
+        "肌酐",
+        "肾脏"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "05eba65d-0864-49ed-bf20-62b0fedc1eab"
+      ]
+    },
+    {
+      "query": "老年高血压患者的降压目标和注意事项",
+      "type": "事实型",
+      "relevant_ids": [
+        "f4411226-8687-436c-aeb2-8aed9e63bf85",
+        "c0422683-3c68-41cd-83c4-9c2f65b72566",
+        "2de255a9-02ba-4c56-8c8c-92768fc8bf03",
+        "f13c3d16-2a3f-4aa8-a93d-c11c37a530f8",
+        "62c365c7-8e69-45ad-9131-ecd7bbbe2e52",
+        "a652642b-6676-4d20-9169-6581a971742a"
+      ],
+      "relevant_keywords": [
+        "老年",
+        "高龄",
+        "降压",
+        "目标",
+        "140",
+        "90",
+        "个体化",
+        "体位性",
+        "低血压"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "难治性高血压的定义和处理策略",
+      "type": "事实型",
+      "relevant_ids": [
+        "82b742ea-e133-4895-a098-d386ec4be6fa",
+        "d991731b-1a32-4df1-816d-168bd6099e10"
+      ],
+      "relevant_keywords": [
+        "难治性",
+        "高血压",
+        "三种",
+        "利尿剂",
+        "病因",
+        "处理"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "3edbaf14-77cc-494b-859b-ba53ed8de382",
+        "f8d3aaad-ec98-4bc1-9124-3d699f477d57"
+      ]
+    },
+    {
+      "query": "高血压患者如何进行血压自我监测",
+      "type": "事实型",
+      "relevant_ids": [
+        "0570f89a-6dfc-4059-9960-4c2a6699a242",
+        "a9c84ed1-34de-45ed-bd28-2b0271dc09b0",
+        "8a869420-062a-4629-9fb8-046f2b0bc7e3"
+      ],
+      "relevant_keywords": [
+        "自我监测",
+        "家庭",
+        "血压计",
+        "测量",
+        "记录",
+        "时间",
+        "频率"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "妊娠期高血压疾病的管理要点",
+      "type": "事实型",
+      "relevant_ids": [
+        "8ffbd18c-df35-4e4d-8761-ac72d7087df8"
+      ],
+      "relevant_keywords": [
+        "妊娠",
+        "孕期",
+        "高血压",
+        "子痫",
+        "降压",
+        "安全",
+        "母婴"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "8ffbd18c-df35-4e4d-8761-ac72d7087df8"
+      ]
+    },
+    {
+      "query": "继发性高血压的常见病因和筛查",
+      "type": "事实型",
+      "relevant_ids": [
+        "2de255a9-02ba-4c56-8c8c-92768fc8bf03"
+      ],
+      "relevant_keywords": [
+        "继发性",
+        "高血压",
+        "筛查",
+        "肾动脉",
+        "狭窄",
+        "嗜铬",
+        "醛固酮"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "23b1713d-0efe-4556-b843-ac0e2c33bd62",
+        "42b3f86b-3663-4b07-bad1-7118ba568e92",
+        "8ffbd18c-df35-4e4d-8761-ac72d7087df8",
+        "abbd0347-e204-4044-b16f-96659db30a0c"
+      ]
+    },
+    {
+      "query": "强化降压120mmHg的目标适合所有患者吗",
+      "type": "边界",
+      "relevant_ids": [
+        "f13c3d16-2a3f-4aa8-a93d-c11c37a530f8"
+      ],
+      "relevant_keywords": [
+        "强化",
+        "120",
+        "BPROAD",
+        "老年",
+        "个体化",
+        "低血压",
+        "电解质"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "ACEI类药物引起干咳后应如何处理",
+      "type": "多跳",
+      "relevant_ids": [
+        "bc700093-60d3-44db-aeb6-1b99fab70f86"
+      ],
+      "relevant_keywords": [
+        "ACEI",
+        "干咳",
+        "ARB",
+        "更换",
+        "不耐受"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": [
+        "bc700093-60d3-44db-aeb6-1b99fab70f86"
+      ]
+    },
+    {
+      "query": "β受体阻滞剂适合哪些高血压患者",
+      "type": "事实型",
+      "relevant_ids": [
+        "82b742ea-e133-4895-a098-d386ec4be6fa",
+        "a9c84ed1-34de-45ed-bd28-2b0271dc09b0"
+      ],
+      "relevant_keywords": [
+        "β受体阻滞剂",
+        "心率",
+        "冠心病",
+        "心衰",
+        "心肌梗死",
+        "心律失常"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    },
+    {
+      "query": "钙通道阻滞剂CCB的不良反应有哪些",
+      "type": "事实型",
+      "relevant_ids": [
+        "7697a5d7-6f52-4339-971c-0b0e84020b89",
+        "4ba7b53e-7990-4618-bf7f-cb67f6ef470c"
+      ],
+      "relevant_keywords": [
+        "CCB",
+        "钙通道",
+        "不良反应",
+        "水肿",
+        "头痛",
+        "面部潮红",
+        "心动过速"
+      ],
+      "_reannotated": true,
+      "_orig_relevant_ids": []
+    }
+  ]
+}

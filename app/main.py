@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """FastAPI 应用入口：生命周期内初始化异步数据库引擎。"""
 
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,27 +12,50 @@ from app.api.routes import chat, document, health, sessions
 from app.config import get_settings
 from app.infrastructure.database.session import configure_session, init_engine
 
+# ---------------------------------------------------------------------------
+# 配置 loguru 终端输出，确保记忆读写日志在终端可见
+# ---------------------------------------------------------------------------
+_settings = get_settings()
+logger.remove()  # 移除默认 handler
+logger.add(
+    sys.stderr,
+    level=_settings.log_level,
+    format=(
+        "<green>{time:HH:mm:ss}</green> | "
+        "<level>{level: <8}</level> | "
+        "<level>{message}</level>"
+    ),
+    colorize=True,
+)
+# 如果需要在终端快速定位记忆相关日志，可单独开启 DEBUG：
+# logger.enable("__main__") 或设置 LOG_LEVEL=DEBUG 环境变量
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("启动 {} ({})", settings.app_name, settings.app_env)
-    engine = init_engine(settings.database_url)
-    configure_session(engine)
+    engine = None
+    if settings.database_url:
+        engine = init_engine(settings.database_url)
+        configure_session(engine)
 
-    # 自动建表（开发环境；生产应使用 Alembic 迁移）
-    try:
-        from app.infrastructure.database.models import Base
+        # 自动建表（开发环境；生产应使用 Alembic 迁移）
+        try:
+            from app.infrastructure.database.models import Base
 
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("数据库表已就绪")
-    except Exception as exc:
-        logger.warning("数据库建表失败，可能 PG 未启动: {}", exc)
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("数据库表已就绪")
+        except Exception as exc:
+            logger.warning("数据库建表失败，可能 PG 未启动: {}", exc)
+    else:
+        logger.info("未配置 DATABASE_URL，跳过数据库初始化（使用内存降级）")
 
     app.state.engine = engine
     yield
-    await engine.dispose()
+    if engine is not None:
+        await engine.dispose()
     logger.info("关闭 {}", settings.app_name)
 
 

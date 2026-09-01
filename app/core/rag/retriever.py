@@ -40,8 +40,28 @@ class MilvusSearchable(Protocol):
 
 
 def _tokenize(text: str) -> list[str]:
-    """简单中英文分词：按非字母数字 Unicode 切分。"""
-    return [t.lower() for t in re.findall(r"[\w\u4e00-\u9fff]+", text) if t]
+    """中英文混合分词：jieba 中文分词 + 正则英文。
+
+    与 app/core/rag_service.py 保持一致，避免中文整句被当作单个词、
+    导致关键词检索失效的问题。
+    """
+    try:
+        import jieba
+
+        tokens: list[str] = []
+        for token in jieba.lcut(text):
+            token = token.strip().lower()
+            if not token:
+                continue
+            if re.search(r"[a-z0-9]", token):
+                tokens.extend(
+                    [t for t in re.findall(r"[a-z0-9一-鿿]+", token) if t]
+                )
+            else:
+                tokens.append(token)
+        return tokens
+    except ImportError:
+        return [t.lower() for t in re.findall(r"[\w一-鿿]+", text) if t]
 
 
 class _BM25Index:

@@ -237,16 +237,8 @@ class ReActAgent:
                 steps.append(rec)
                 if trace_cb:
                     await trace_cb(rec)
-                if self._memory is not None:
-                    try:
-                        await self._memory.append_turn(
-                            session_id,
-                            "assistant",
-                            answer,
-                            metadata={"agent": "react", "steps": len(steps)},
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("写入记忆失败: %s", e)
+                # 记忆写入统一由 agent_service.chat 在编排结束后执行（user + assistant），
+                # 避免与服务层重复写入；同时防止 plan_execute 子任务结果污染会话记忆。
                 return AgentResult(success=True, final_answer=answer, steps=steps)
 
             action = parsed.get("action")

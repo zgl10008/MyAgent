@@ -6,11 +6,12 @@ services:
     container_name: enterprise-ai-agent-app
     ports:
       - "8000:8000"
+    volumes:
+      - app_data:/data
     environment:
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/agent_db
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agent_db
       REDIS_URL: redis://redis:6379/0
-      MILVUS_HOST: milvus
-      MILVUS_PORT: "19530"
+      MILVUS_DB_PATH: /data/milvus.db
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     depends_on:
       postgres:
@@ -99,6 +100,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  app_data:
   postgres_data:
   redis_data:
   etcd_data:

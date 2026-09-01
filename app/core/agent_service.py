@@ -14,6 +14,14 @@ from typing import Any
 from loguru import logger
 
 from app.config import get_settings
+from app.core.agent.function_call_agent import FunctionCallAgent
+from app.core.agent.mode_router import ModeRouter
+from app.core.domain.policy import get_domain_policy
+from app.core.domain.risk_classifier import (
+    RiskDecision,
+    RiskDisposition,
+    classify_risk,
+)
 from app.core.agent.orchestrator import (
     AgentOrchestrator,
     InMemoryTracer,
@@ -21,9 +29,11 @@ from app.core.agent.orchestrator import (
     OrchestrationMode,
 )
 from app.core.intent.recognizer import IntentRecognizer
+from app.core.memory.long_term import LongTermMemory
 from app.core.persistent_memory import PersistentMemoryManager, _CompressLLMAdapter
 from app.core.session_repository import SessionRepository
 from app.core.tools.builtin.calculator import CalculatorTool
+from app.core.tools.builtin.rag_search import RAGSearchTool
 from app.core.tools.builtin.search import WebSearchTool
 from app.core.tools.registry import ToolRegistry
 from app.infrastructure.llm.model_router import ModelConfig, ModelRouter
@@ -50,8 +60,8 @@ class _ToolRegistryAdapter:
     def list_tool_names(self) -> list[str]:
         return [t.name for t in self._registry.get_all_tools()]
 
-    def get_tools_description(self) -> str:
-        return self._registry.get_tools_description()
+    def get_tools_description(self, names: list[str] | None = None) -> str:
+        return self._registry.get_tools_description(names)
 
     async def invoke(self, name: str, arguments: dict[str, Any]) -> str:
         try:
@@ -134,7 +144,7 @@ class AgentService:
         # 2. 工具注册
         self._tool_registry = ToolRegistry()
         self._tool_registry.register(CalculatorTool())
-        self._tool_registry.register(WebSearchTool(api_key=settings.serpapi_api_key))
+        self._tool_registry.register(WebSearchTool(timeout=settings.search_timeout))
         self._tool_adapter = _ToolRegistryAdapter(self._tool_registry)
 
         # 3. 记忆（Redis 热路径 + PostgreSQL 冷存储 + 内存降级）
@@ -156,10 +166,186 @@ class AgentService:
             pg_repo=pg_repo,
         )
 
+        # 3b. 长期语义记忆（Milvus，可选）
+        try:
+            from pymilvus import CollectionSchema, DataType, FieldSchema, MilvusClient
+            try:
+                from pymilvus import IndexParams  # pymilvus 2.x
+            except ImportError:
+                from pymilvus.milvus_client.index import IndexParams  # pymilvus 3.x
+
+            _ltm_client = MilvusClient(settings.milvus_db_path)
+            _ltm_coll_name = "long_term_memory"
+
+            # 长期记忆向量维度必须与当前 embedding 模型一致（bge-m3=1024，all-MiniLM-L6-v2=384），
+            # 从模型动态读取，避免换模型后 schema 维度错位导致读写失败。
+            from app.core.rag_service import (
+                SentenceTransformerEmbeddingAdapter,
+                _get_embedding_model,
+            )
+
+            try:
+                _ltm_dim = _get_embedding_model().get_sentence_embedding_dimension()
+            except Exception:
+                _ltm_dim = 384
+
+            def _ensure_ltm_collection() -> None:
+                """按 LongTermMemory 的字段约定建集合，并迁移旧版错误 schema。
+
+                旧版用 create_collection(dimension=...) 默认建出 id/vector 两个字段，
+                与 LongTermMemory 读写使用的 pk/embedding/content/session_id/meta
+                完全错位，且度量 L2 与集合 COSINE 不一致，导致读写双双失败。
+                此处仅在旧集合确实为空时重建，避免误删数据。
+                """
+                required_fields = {"pk", "embedding", "content", "session_id", "meta"}
+                if _ltm_client.has_collection(_ltm_coll_name):
+                    fields_desc = _ltm_client.describe_collection(_ltm_coll_name)["fields"]
+                    field_names = {f["name"] for f in fields_desc}
+                    # 校验 embedding 维度是否与当前模型一致，换模型（384→1024）后需重建
+                    existing_dim = None
+                    for f in fields_desc:
+                        if f["name"] == "embedding":
+                            existing_dim = (f.get("params") or {}).get("dim")
+                            break
+                    if required_fields.issubset(field_names) and existing_dim == _ltm_dim:
+                        _ltm_client.load_collection(_ltm_coll_name)
+                        return
+                    if existing_dim is not None and existing_dim != _ltm_dim:
+                        logger.warning(
+                            "长期语义记忆集合 embedding 维度 {} 与模型 {} 不一致，尝试重建: {}",
+                            existing_dim,
+                            _ltm_dim,
+                            _ltm_coll_name,
+                        )
+                    logger.warning(
+                        "长期语义记忆集合 schema 不兼容（旧版 id/vector），尝试重建: {}",
+                        _ltm_coll_name,
+                    )
+                    try:
+                        _ltm_client.load_collection(_ltm_coll_name)
+                        cnt = _ltm_client.query(
+                            _ltm_coll_name,
+                            filter="",
+                            output_fields=["count(*)"],
+                        )[0]["count(*)"]
+                    except Exception:
+                        cnt = 0
+                    if cnt:
+                        logger.error(
+                            "长期语义记忆集合含数据且 schema 不兼容，跳过重建，请手动迁移: {}",
+                            _ltm_coll_name,
+                        )
+                        return
+                    _ltm_client.drop_collection(_ltm_coll_name)
+
+                fields = [
+                    FieldSchema(
+                        name="pk",
+                        dtype=DataType.VARCHAR,
+                        is_primary=True,
+                        max_length=64,
+                    ),
+                    FieldSchema(
+                        name="embedding",
+                        dtype=DataType.FLOAT_VECTOR,
+                        dim=_ltm_dim,
+                    ),
+                    FieldSchema(
+                        name="content",
+                        dtype=DataType.VARCHAR,
+                        max_length=65535,
+                    ),
+                    FieldSchema(
+                        name="session_id",
+                        dtype=DataType.VARCHAR,
+                        max_length=128,
+                    ),
+                    FieldSchema(
+                        name="meta",
+                        dtype=DataType.VARCHAR,
+                        max_length=8192,
+                    ),
+                ]
+                schema = CollectionSchema(fields, description="长期语义记忆（按会话语义召回）")
+                try:
+                    index_params = IndexParams()
+                    index_params.add_index(
+                        field_name="embedding",
+                        index_type="AUTOINDEX",
+                        metric_type="COSINE",
+                    )
+                    _ltm_client.create_collection(
+                        collection_name=_ltm_coll_name,
+                        schema=schema,
+                        index_params=index_params,
+                    )
+                except Exception:
+                    # 兼容旧版 pymilvus（index_params 需为 dict）；
+                    # 若 IndexParams 方式已半建集合，先清理再重建。
+                    logger.warning("IndexParams 建集合失败，退回 dict 方式")
+                    if _ltm_client.has_collection(_ltm_coll_name):
+                        _ltm_client.drop_collection(_ltm_coll_name)
+                    _ltm_client.create_collection(
+                        collection_name=_ltm_coll_name,
+                        schema=schema,
+                        index_params={
+                            "index_type": "AUTOINDEX",
+                            "metric_type": "COSINE",
+                            "params": {},
+                        },
+                    )
+                _ltm_client.load_collection(_ltm_coll_name)
+                logger.info("长期语义记忆集合已就绪: {}", _ltm_coll_name)
+
+            _ensure_ltm_collection()
+
+            # 适配器：MilvusClient → ORM Collection 接口（LongTermMemory 使用 ORM 风格 API）
+            class _LTMCollectionAdapter:
+                def __init__(self, client: Any, coll_name: str) -> None:
+                    self._c = client
+                    self._n = coll_name
+
+                def insert(self, data: Any, **kwargs: Any) -> Any:
+                    # LongTermMemory.store 传入的是行字典列表，直接透传即可。
+                    # 此前按 5 元组解包，与实际调用不匹配，导致写入在适配器层就失败。
+                    return self._c.insert(collection_name=self._n, data=data)
+
+                def search(self, data: Any, anns_field: str, param: Any,
+                           limit: int, expr: str | None = None,
+                           output_fields: list[str] | None = None, **kwargs: Any) -> Any:
+                    return self._c.search(
+                        collection_name=self._n, data=data, anns_field=anns_field,
+                        search_params=param, limit=limit, filter=expr,
+                        output_fields=output_fields,
+                    )
+
+                def delete(self, expr: str, **kwargs: Any) -> Any:
+                    return self._c.delete(collection_name=self._n, filter=expr)
+
+                def flush(self, **kwargs: Any) -> Any:
+                    return self._c.flush(collection_name=self._n)
+
+            _ltm_embed = SentenceTransformerEmbeddingAdapter(_get_embedding_model())
+            _ltm_coll = _LTMCollectionAdapter(_ltm_client, _ltm_coll_name)
+            ltm = LongTermMemory(milvus_collection=_ltm_coll, embedding_model=_ltm_embed)
+            self._memory.set_long_term(ltm)
+            logger.info("长期语义记忆已启用（Milvus 语义召回，collection={}）", _ltm_coll_name)
+        except Exception as exc:
+            logger.warning("长期语义记忆不可用，跳过: {}", exc)
+
         # 4. 追踪与意图（LLM 分类 + 关键词降级）
         self._tracer = InMemoryTracer()
         intent_llm = self._model_adapter.get_llm("intent")
         self._intent_recognizer = IntentRecognizer(llm=intent_llm)
+
+        # 4b. ModeRouter（意图驱动的自动模式选择）
+        # RAG 可用性通过工具列表传递（含 rag_search 即表示知识库可用）
+        self._rag_service: Any = None
+        self._mode_router = ModeRouter(
+            llm=intent_llm,
+            tool_names=self._tool_adapter.list_tool_names(),
+        )
+        logger.info("ModeRouter 已就绪（规则快路径 + LLM Router 兜底）")
 
         # 5. 编排器配置
         orchestrator_config = _DictConfig(
@@ -169,6 +355,7 @@ class AgentService:
                 "react_max_steps": 10,
                 "max_replan_attempts": 2,
                 "reflection_min_quality": 60,
+                "use_function_calling": True,
             }
         )
 
@@ -181,12 +368,132 @@ class AgentService:
             tracer=self._tracer,
         )
 
+        # 7. FunctionCall Agent（ReAct 的 FC 后端，非独立模式）
+        # 当 use_function_calling=True 时，ReAct 和 Plan-and-Execute 子任务都使用此 backend
+        try:
+            from pydantic import BaseModel, Field, create_model
+            from langchain_core.tools import StructuredTool
+
+            _fc_tools: list = []
+            for t in self._tool_registry.get_all_tools():
+                # 从工具参数动态构建 Pydantic args_schema
+                fields: dict[str, Any] = {}
+                for param in t.parameters:
+                    field_kwargs: dict = {"description": param.description}
+                    if param.required:
+                        fields[param.name] = (str, Field(**field_kwargs))
+                    else:
+                        fields[param.name] = (str | None, Field(default=None, **field_kwargs))
+                if not fields:
+                    fields["query"] = (str, Field(description="查询参数"))
+
+                ToolArgs = create_model(f"{t.name}_args", **fields)
+
+                # 用默认参数固化当前 tool 引用（避免闭包延迟绑定问题）
+                def _make_executor(tool=t):
+                    async def _execute(**kwargs: Any) -> str:
+                        filtered = {k: v for k, v in kwargs.items() if v is not None}
+                        return await tool.execute(**filtered)
+                    _execute.__name__ = tool.name
+                    return _execute
+
+                fc_tool = StructuredTool.from_function(
+                    coroutine=_make_executor(),
+                    name=t.name,
+                    description=t.description,
+                    args_schema=ToolArgs,
+                )
+                _fc_tools.append(fc_tool)
+
+            self._function_call_agent = FunctionCallAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                base_url=settings.openai_api_base or "https://api.openai.com/v1",
+                tools=_fc_tools,
+                max_steps=int(orchestrator_config.get("react_max_steps", 10)),
+                memory=self._memory,
+            )
+            self._orchestrator.set_function_call_agent(self._function_call_agent)
+            logger.info("FunctionCall Agent 已注入编排器（function_call 模式可用）")
+        except Exception as exc:
+            logger.warning("FunctionCall Agent 创建失败，function_call 模式不可用: {}", exc)
+
         logger.info("AgentService 初始化完成")
 
     @property
     def memory(self) -> PersistentMemoryManager:
         """暴露记忆管理器供外部访问（如会话列表路由）。"""
         return self._memory
+
+    def set_rag_service(self, rag_service: Any) -> None:
+        """注入 RAGService 并将其注册为 Agent 可调用的知识库检索工具。
+
+        RAG 不再是独立端点——Agent 在 ReAct 循环中可以自主决定：
+        - 何时用 rag_search 查私有知识库
+        - 何时用 web_search 搜公开互联网
+        - 何时两者结果交叉验证
+        """
+        self._rag_service = rag_service
+
+        # 将 RAG 检索封装为工具，注册到工具系统中
+        async def _search(query: str, top_k: int = 5) -> list:
+            return await rag_service.search(query, top_k=top_k, mode="hybrid")
+
+        rag_tool = RAGSearchTool(
+            search_func=_search,
+            chunks_count=lambda: rag_service.chunks_count,
+        )
+        self._tool_registry.register(rag_tool)
+
+        # 更新 ModeRouter 的工具列表（用于 LLM Router 决策时感知可用能力）
+        self._mode_router._tool_names = self._tool_adapter.list_tool_names()
+
+        logger.info(
+            "RAGService 已注入并注册为 rag_search 工具（知识库块数: {}）",
+            rag_service.chunks_count,
+        )
+
+    async def _classify_safety(
+        self,
+        policy,
+        text: str,
+    ) -> RiskDecision:
+        """两阶段医疗风险分级；关闭 LLM 确认时退化为纯关键词判断。"""
+        settings = get_settings()
+        if not settings.safety_risk_classifier_enabled:
+            if policy.is_high_risk(text):
+                return RiskDecision(
+                    RiskDisposition.EMERGENCY,
+                    reason="命中高风险关键词（LLM 确认已关闭）",
+                    answer=policy.safety_prefix(text),
+                )
+            return RiskDecision(RiskDisposition.SAFE, reason="未命中高风险关键词")
+        safety_llm = self._model_adapter.get_llm("safety")
+        return await classify_risk(policy, text, safety_llm)
+
+    async def _safety_response(
+        self,
+        trace_id: str,
+        request: AgentChatRequest,
+        session_id: str,
+        user_text: str,
+        answer: str,
+        mode: str,
+    ) -> AgentChatResponse:
+        """安全分流（急诊/澄清）的统一短路响应，不进入工具调用链。"""
+        await self._memory.append_turn(session_id, "user", user_text)
+        await self._memory.append_turn(session_id, "assistant", answer)
+        return AgentChatResponse(
+            id=trace_id,
+            model=request.model or get_settings().openai_model,
+            content=answer,
+            trace_id=trace_id,
+            usage={"total_steps": 0},
+            agent_mode=mode,
+            steps=[],
+            tool_calls=[],
+            degraded=False,
+        )
 
     async def chat(
         self,
@@ -196,22 +503,70 @@ class AgentService:
         trace_id = str(uuid.uuid4())
         session_id = request.conversation_id or trace_id
         user_text = request.messages[-1].content if request.messages else ""
+        policy = get_domain_policy(request.domain)
 
-        # 1. 意图识别
-        intent_result = await self._intent_recognizer.recognize(user_text)
+        # 医疗安全门：关键词粗筛 + LLM 二次确认，区分「正在发作/询问知识/既往史」。
+        # 仅 emergency 短路返回急诊话术；clarify 追问确认；safe 走正常流程。
+        safety_decision = await self._classify_safety(policy, user_text)
+        if safety_decision.disposition is RiskDisposition.EMERGENCY:
+            return await self._safety_response(
+                trace_id, request, session_id, user_text,
+                safety_decision.answer or policy.safety_prefix(user_text),
+                "safety",
+            )
+        if safety_decision.disposition is RiskDisposition.CLARIFY:
+            return await self._safety_response(
+                trace_id, request, session_id, user_text,
+                safety_decision.answer or policy.clarify_notice,
+                "clarify",
+            )
+        #    意图识别与模式路由需要历史上下文才能处理追问/指代，如"那它呢？""还有吗？"。
+        #    与编排器内部使用的同一份记忆（短期 + 长期语义），读取失败则按单轮处理。
+        history: list[str] = []
+        try:
+            history = await self._memory.get_relevant(session_id, user_text, limit=6)
+        except Exception as exc:
+            logger.warning("读取历史上下文失败，意图/路由按单轮处理: {}", exc)
+
+        # 1. 意图识别（注入历史上下文）
+        intent_result = await self._intent_recognizer.recognize(
+            user_text,
+            context={"history": history} if history else None,
+        )
+
+        # 1b. 模式选择：显式指定直接使用，否则 ModeRouter 自动路由
+        _EXPLICIT_MODES = frozenset({"react", "plan_execute"})
+        requested_mode = (request.agent_mode or "").strip().lower()
+
+        if requested_mode in _EXPLICIT_MODES:
+            selected_mode = requested_mode
+            logger.info("使用显式指定模式: {}", selected_mode)
+        else:
+            decision = await self._mode_router.resolve(
+                user_text,
+                intent_result,
+                history=history or None,
+            )
+            selected_mode = decision.mode
+            logger.info(
+                "ModeRouter 自动路由: intent={} conf={:.2f} → mode={} source={}",
+                intent_result.intent, intent_result.confidence,
+                selected_mode, decision.source,
+            )
 
         intent_ctx = IntentContext(
             intent=intent_result.intent,
             confidence=intent_result.confidence,
             slots=intent_result.slots,
-            preferred_mode=request.agent_mode,  # type: ignore[arg-type]
+            preferred_mode=selected_mode,
+            domain=request.domain,
         )
 
         # 2. 执行编排
         agent_resp = await self._orchestrator.run(
             user_input=user_text,
             session_id=session_id,
-            mode=request.agent_mode,
+            mode=selected_mode,
             intent=intent_ctx,
         )
 
@@ -233,26 +588,46 @@ class AgentService:
             action = s.get("action") or parsed.get("action")
             if action:
                 tool_names.add(str(action))
+            # thought: 优先 parsed（react 版），fallback 到 s（langgraph 版）
+            thought = str(parsed.get("thought") or s.get("thought") or "")
             steps.append(
                 StepInfo(
                     step=int(s.get("step", 0)),
                     phase=str(s.get("phase", "react")),
-                    thought=str(parsed.get("thought") or ""),
+                    thought=thought,
                     action=str(action) if action else None,
                     action_input=s.get("action_input") or parsed.get("action_input"),
                     observation=str(s.get("observation") or ""),
                     final_answer=str(parsed.get("final_answer") or s.get("final_answer") or ""),
                     error=str(s.get("error") or ""),
+                    reflection_score=s.get("reflection_score"),
                 )
             )
 
         # 5. 构建响应
         usage = {"total_steps": len(agent_resp.steps)}
 
+        # 6. 失败兜底：避免前端只显示"步骤 1"、回答区却一片空白
+        content = agent_resp.answer
+        if content:
+            content = policy.with_boundary(content, user_text)
+        if not content and agent_resp.error:
+            content = f"Agent 执行失败：{agent_resp.error}"
+
+        # 从反思报告中提取扩展字段
+        _reflection = agent_resp.reflection
+        reflection_warnings = list(agent_resp.reflection_warnings)
+        hallucination_detected = bool(
+            _reflection and _reflection.likely_hallucination
+        )
+        completeness_notes = (
+            _reflection.completeness_notes if _reflection else ""
+        )
+
         return AgentChatResponse(
             id=trace_id,
             model=request.model or get_settings().openai_model,
-            content=agent_resp.answer,
+            content=content,
             trace_id=agent_resp.trace_id,
             usage=usage,
             agent_mode=agent_resp.mode_used,
@@ -265,9 +640,11 @@ class AgentService:
             steps=steps,
             tool_calls=sorted(tool_names),
             reflection_score=(
-                agent_resp.reflection.quality_score
-                if agent_resp.reflection
-                else None
+                _reflection.quality_score if _reflection else None
             ),
             degraded=agent_resp.degraded,
+            reflection_warnings=reflection_warnings,
+            hallucination_detected=hallucination_detected,
+            completeness_notes=completeness_notes,
+            correction_applied=agent_resp.correction_applied,
         )

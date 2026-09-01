@@ -139,7 +139,7 @@ export default function DocumentsPage() {
             </div>
           </>
         ) : (
-          <SearchCompare refreshKey={0} />
+          <SearchCompare />
         )}
       </div>
     </div>

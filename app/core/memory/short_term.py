@@ -53,7 +53,7 @@ class ShortTermMemory:
     def _count_tokens(self, text: str) -> int:
         """估算 token 数。"""
         if self._encoding is None:
-            return max(1, len(text) // 4)
+            return max(1, len(text) // 2)  # 粗略估算：平均每 2 个字符一个 token
         return len(self._encoding.encode(text))
 
     def _serialize(self, msg: Message) -> str:
@@ -90,13 +90,33 @@ class ShortTermMemory:
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8", errors="replace")
             messages.append(self._deserialize(str(raw)))
+        logger.info(
+            "Redis 读取短期记忆 session_id={} count={}",
+            session_id,
+            len(messages),
+        )
         return messages
+
+    async def delete(self, session_id: str) -> None:
+        """删除会话的短期记忆键（用于删除会话时同步清理 Redis）。"""
+        key = self._key(session_id)
+        try:
+            await self._redis.delete(key)
+        except Exception as e:
+            logger.exception("Redis DEL 失败: {}", e)
+            raise RuntimeError(f"删除短期记忆失败: {e}") from e
 
     async def add_message(self, session_id: str, message: Message) -> None:
         """追加一条消息并视需要触发压缩。"""
         key = self._key(session_id)
         try:
             await self._redis.rpush(key, self._serialize(message))
+            logger.info(
+                "Redis 写入短期记忆 session_id={} role={} content_len={}",
+                session_id,
+                message.role.value,
+                len(message.content or ""),
+            )
         except Exception as e:
             logger.exception("Redis RPUSH 失败: {}", e)
             raise RuntimeError(f"写入短期记忆失败: {e}") from e
@@ -179,13 +199,24 @@ class ShortTermMemory:
         self, session_id: str, query: str, limit: int = 8
     ) -> list[str]:
         """满足 MemoryLike / MemoryManager 协议：返回格式化历史字符串。"""
+        logger.info(
+            "[记忆-读] ShortTermMemory.get_relevant session_id={} limit={}",
+            session_id,
+            limit,
+        )
         try:
             msgs = await self.get_history(session_id)
         except Exception:
             logger.exception("Redis 读取记忆失败")
             return []
         recent = msgs[-limit:]
-        return [f"{m.role.value}: {m.content}" for m in recent]
+        result = [f"{m.role.value}: {m.content}" for m in recent]
+        logger.info(
+            "[记忆-读] ShortTermMemory.get_relevant 结果 session_id={} count={}",
+            session_id,
+            len(result),
+        )
+        return result
 
     async def append_turn(
         self,
@@ -197,6 +228,12 @@ class ShortTermMemory:
         """满足 MemoryLike / MemoryManager 协议：直接入库。"""
         from app.models.enums import MessageRole as MR
 
+        logger.info(
+            "[记忆-写] ShortTermMemory.append_turn session_id={} role={} content_len={}",
+            session_id,
+            role,
+            len(content or ""),
+        )
         msg = Message(
             role=MR(role),
             content=content,

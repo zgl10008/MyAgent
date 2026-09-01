@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, type InputHTMLAttributes } from 'react';
+import { useState, useRef, useCallback, type InputHTMLAttributes, type Ref } from 'react';
 
 interface DropzoneResult {
   dragOver: boolean;
@@ -7,7 +7,7 @@ interface DropzoneResult {
     onDragLeave: (e: React.DragEvent) => void;
     onDrop: (e: React.DragEvent) => void;
   };
-  inputProps: InputHTMLAttributes<HTMLInputElement>;
+  inputProps: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> };
 }
 
 export function useDropzone(onFile: (file: File) => void): DropzoneResult {

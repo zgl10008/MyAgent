@@ -33,10 +33,17 @@ class ToolRegistry:
         """返回全部工具列表。"""
         return list(self._tools.values())
 
-    def get_tools_description(self) -> str:
-        """生成所有工具的自然语言描述（用于 System Prompt）。"""
+    def get_tools_description(self, names: list[str] | None = None) -> str:
+        """生成工具自然语言描述（用于 System Prompt）。
+
+        :param names: 为 None 时返回全部工具；否则只返回指定名称的工具描述。
+        """
+        tools = list(self._tools.values())
+        if names is not None:
+            allowed = set(names)
+            tools = [t for t in tools if t.name in allowed]
         lines: list[str] = []
-        for t in self._tools.values():
+        for t in tools:
             params = ", ".join(f"{p.name}: {p.type}" for p in t.parameters) or "无"
             lines.append(f"- {t.name}: {t.description}（参数: {params}）")
         return "\n".join(lines) if lines else "（当前无可用工具）"

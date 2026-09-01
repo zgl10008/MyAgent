@@ -1,9 +1,18 @@
 """应用配置：基于 pydantic-settings，支持环境变量与 .env 文件。"""
 
+import os
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 限制底层 BLAS / 数学库线程数，避免 sentence-transformers + torch + OpenBLAS
+# 线程过载（每线程各自申请工作内存）导致的 "OpenBLAS memory allocation failed"。
+# 必须在 numpy/torch 首次初始化前设置（config 是大多数入口最先导入的模块）。
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 
 class Settings(BaseSettings):
@@ -28,8 +37,8 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4o-mini", description="默认对话模型")
 
     database_url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/agent_db",
-        description="SQLAlchemy 异步数据库 URL（推荐 postgresql+asyncpg）",
+        default="",
+        description="SQLAlchemy 异步数据库 URL（推荐 postgresql+asyncpg）；留空则跳过数据库初始化，走内存降级",
     )
     redis_url: str = Field(default="redis://localhost:6379/0", description="Redis URL")
 
@@ -42,11 +51,59 @@ class Settings(BaseSettings):
         description="RAG 向量集合名",
     )
 
-    serpapi_api_key: str = Field(default="", description="SerpAPI 搜索 API Key")
+    search_timeout: float = Field(
+        default=8.0,
+        description="网络搜索（百度）请求超时（秒）",
+    )
 
     hf_endpoint: str = Field(
         default="https://hf-mirror.com",
         description="HuggingFace 镜像（国内加速）",
+    )
+
+    embedding_model: str = Field(
+        default="BAAI/bge-m3",
+        description="语义向量模型（中文/多语言检索推荐 bge-m3，1024 维；轻量可换 all-MiniLM-L6-v2，384 维）",
+    )
+    embedding_device: str = Field(
+        default="",
+        description="向量模型设备（cuda / cpu，留空自动检测，有 GPU 时优先 cuda）",
+    )
+
+    # Cross-Encoder 精排（默认开启）：RRF 召回后对候选集重排序，提升精度。
+    # 首次启用会加载 cross-encoder 模型，失败自动降级为原始召回顺序。
+    # 想关掉可设 RERANK_ENABLED=false（生产按需开关，精排会增加单次检索延迟）。
+    rerank_enabled: bool = Field(
+        default=True,
+        description="是否启用 cross-encoder 精排（两阶段检索第二阶段）",
+    )
+    rerank_model: str = Field(
+        default="BAAI/bge-reranker-v2-m3",
+        description="Cross-Encoder 重排序模型名或本地路径（中文检索需用多语言模型，如 bge-reranker-v2-m3；英文可换 ms-marco-MiniLM）",
+    )
+    rerank_candidate_k: int = Field(
+        default=50,
+        description="精排前召回的候选数量（cross-encoder 只对候选集打分，避免全库精排过慢）。"
+        "默认 50：rerank 深度消融（scripts/eval_rag.py --rerank-candidate-k 20/50）显示"
+        "50 深度比 20 多 ~3pp Recall@5 / ~5pp MRR 精排增益，且 916 块库上精排 50 候选开销可忽略。",
+    )
+    rerank_device: str = Field(
+        default="",
+        description="Cross-Encoder 设备（cuda / cpu / mps，留空自动选择）",
+    )
+
+    # 库外拒答门控：top-1 精排相关度低于该阈值时，判定知识库无相关内容，返回拒答
+    # 而非硬答（避免库外问题幻觉）。None=关闭（默认）。阈值只对 cross-encoder 精排分
+    # （[0,1] 越大越相关）有意义，故仅 rerank 开启时生效。推荐值由
+    # scripts/calibrate_refuse_threshold.py 在评测集上校准得到。
+    rag_refuse_threshold: float | None = Field(
+        default=None,
+        description="库外拒答门控阈值（None=关闭；精排 top-1 分低于此值即拒答）",
+    )
+
+    safety_risk_classifier_enabled: bool = Field(
+        default=True,
+        description="医疗安全门是否启用 LLM 二次确认（区分正在发作/询问知识/既往史，降低关键词误拦）",
     )
 
     log_level: str = Field(default="INFO", description="日志级别")

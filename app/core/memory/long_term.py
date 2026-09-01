@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
@@ -47,6 +48,17 @@ class LTMCollectionProtocol(Protocol):
         ...
 
 
+def _is_milvus_windows_rename_error(exc: Exception) -> bool:
+    """判断是否为 Milvus Lite 在 Windows 上的 os.rename 已知 bug。"""
+    msg = str(exc).lower()
+    return (
+        isinstance(exc, FileExistsError)
+        or "winerror 183" in msg
+        or "当文件已存在时" in msg
+        or "fileexists" in msg
+    )
+
+
 class LongTermMemory:
     """长期记忆：基于向量数据库的持久化记忆。"""
 
@@ -56,7 +68,8 @@ class LongTermMemory:
     pk_field: str = "pk"
     meta_field: str = "meta"
 
-    metric_param: dict[str, Any] = {"metric_type": "L2", "params": {"nprobe": 16}}
+    # 与 agent_service 建集合时指定的 COSINE 度量保持一致
+    metric_param: dict[str, Any] = {"metric_type": "COSINE", "params": {"nprobe": 16}}
 
     def __init__(self, milvus_collection: Any, embedding_model: Any) -> None:
         """
@@ -65,6 +78,8 @@ class LongTermMemory:
         """
         self._coll = milvus_collection
         self._embed = embedding_model
+        # Milvus Lite uses a shared manifest file; serialize mutating operations.
+        self._write_lock = threading.Lock()
 
     def _ensure_embed(self) -> None:
         if not isinstance(self._embed, LTMEmbedProtocol):
@@ -93,11 +108,22 @@ class LongTermMemory:
                 self.meta_field: json.dumps(meta, ensure_ascii=False),
             }
             # pymilvus 2.4+ 支持实体字典列表，字段名需与 Collection Schema 一致
-            self._coll.insert([row])
-            try:
-                self._coll.flush()
-            except Exception as fe:
-                logger.warning("flush 失败（可忽略）: {}", fe)
+            with self._write_lock:
+                self._coll.insert([row])
+                logger.info(
+                    "Milvus 写入长期记忆 session_id={} memory_id={} content_len={} embedding_dim={}",
+                    session_id,
+                    memory_id,
+                    len(content or ""),
+                    len(vec),
+                )
+                try:
+                    self._coll.flush()
+                except Exception as fe:
+                    if _is_milvus_windows_rename_error(fe):
+                        pass  # Windows: Milvus Lite os.rename 已知 bug, 数据已写入
+                    else:
+                        logger.warning("flush 失败（可忽略）: {}", fe)
 
         try:
             await asyncio.to_thread(_sync)
@@ -127,6 +153,11 @@ class LongTermMemory:
             )
             items: list[MemoryItem] = []
             hits = out[0] if out else []
+            logger.info(
+                "Milvus 读取长期记忆 session_id={} hit_count={}",
+                session_id,
+                len(hits),
+            )
             for hit in hits:
                 entity = getattr(hit, "entity", {}) or {}
                 if hasattr(hit, "entity") and not isinstance(entity, dict):
@@ -145,6 +176,11 @@ class LongTermMemory:
                 items.append(
                     MemoryItem(id=rid, content=text, score=score, metadata=meta),
                 )
+            logger.info(
+                "Milvus 长期记忆读取结果 session_id={} count={}",
+                session_id,
+                len(items),
+            )
             return items
 
         try:
@@ -156,15 +192,20 @@ class LongTermMemory:
     async def forget(self, memory_id: str) -> None:
         """按主键删除一条记忆。"""
         self._ensure_coll()
+        logger.info("[记忆-删] LongTermMemory.forget memory_id={}", memory_id)
 
         def _sync() -> None:
             mid = memory_id.replace("'", "\\'")
             expr = f'{self.pk_field} == "{mid}"'
-            self._coll.delete(expr)
-            try:
-                self._coll.flush()
-            except Exception as fe:
-                logger.warning("flush 失败（可忽略）: {}", fe)
+            with self._write_lock:
+                self._coll.delete(expr)
+                try:
+                    self._coll.flush()
+                except Exception as fe:
+                    if _is_milvus_windows_rename_error(fe):
+                        pass  # Windows: Milvus Lite os.rename 已知 bug
+                    else:
+                        logger.warning("flush 失败（可忽略）: {}", fe)
 
         try:
             await asyncio.to_thread(_sync)

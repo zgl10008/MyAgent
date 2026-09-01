@@ -101,7 +101,8 @@ export interface AgentChatRequest {
   temperature?: number;
   max_tokens?: number;
   conversation_id?: string;
-  agent_mode?: 'react' | 'plan_execute';
+  agent_mode?: 'auto' | 'react' | 'plan_execute';
+  domain?: 'general' | 'cardiovascular';
 }
 
 /** Agent 对话响应 */
@@ -117,6 +118,11 @@ export interface AgentChatResponse {
   tool_calls: string[];
   reflection_score: number | null;
   degraded: boolean;
+  /** 反思扩展字段 */
+  reflection_warnings: string[];
+  hallucination_detected: boolean;
+  completeness_notes: string;
+  correction_applied: boolean;
 }
 
 /** Agent 运行状态（前端跟踪用） */

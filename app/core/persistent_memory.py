@@ -79,7 +79,13 @@ class _InMemoryMemoryManager:
     ) -> list[str]:
         history = self._sessions.get(session_id, [])
         recent = history[-limit:]
-        return [f"{m['role']}: {m['content']}" for m in recent]
+        result = [f"{m['role']}: {m['content']}" for m in recent]
+        logger.info(
+            "[记忆-读] InMemoryMemoryManager.get_relevant session_id={} count={}",
+            session_id,
+            len(result),
+        )
+        return result
 
     async def append_turn(
         self,
@@ -97,7 +103,12 @@ class _InMemoryMemoryManager:
         self._session_meta[session_id]["updated_at"] = time.time()
         if role == "user":
             self._update_title(session_id, content)
-
+        logger.info(
+            "[记忆-写] InMemoryMemoryManager.append_turn session_id={} role={} content_len={}",
+            session_id,
+            role,
+            len(content or ""),
+        )
 
 # ==============================================================================
 # LLM 适配器：将 ModelRouter.acomplete 包装为 ShortTermMemory 需要的 ainvoke
@@ -151,6 +162,7 @@ class PersistentMemoryManager:
         self._pg = pg_repo
         self._redis_ok = redis_client is not None
         self._pg_ok = True  # 先乐观标记，首次调用失败再降级
+        self._long_term: Any = None  # 可选：LongTermMemory（Milvus 语义召回）
 
         # Redis 短期记忆（滑动窗口 + 压缩）
         if self._redis_ok and compress_llm is not None:
@@ -178,17 +190,39 @@ class PersistentMemoryManager:
         )
 
     # ------------------------------------------------------------------
+    # 长期记忆注入（可选）
+    # ------------------------------------------------------------------
+
+    def set_long_term(self, long_term: Any) -> None:
+        """注入 LongTermMemory 实例，启用语义召回。"""
+        self._long_term = long_term
+        logger.info("长期语义记忆已注入 PersistentMemoryManager")
+
+    # ------------------------------------------------------------------
     # MemoryLike 协议（供 Orchestrator / ReActAgent / PlannerAgent）
     # ------------------------------------------------------------------
 
     async def get_relevant(
         self, session_id: str, query: str, limit: int = 8
     ) -> list[str]:
-        """获取与查询相关的历史记忆片段。优先级：Redis → PG → 内存。"""
+        """获取与查询相关的历史记忆片段。优先级：Redis → PG → 内存 + 长期语义。"""
+        items: list[str] = []
+        logger.info(
+            "记忆读取开始 session_id={} limit={}",
+            session_id,
+            limit,
+        )
+
         # 1) 尝试 Redis（热路径）
         if self._redis_ok and self._redis_stm is not None:
             try:
-                return await self._redis_stm.get_relevant(session_id, query, limit)
+                items = await self._redis_stm.get_relevant(session_id, query, limit)
+                logger.info("记忆读取 Redis session_id={} count={}", session_id, len(items))
+                if items:
+                    # 叠加长期语义记忆后返回
+                    result = await self._append_long_term(items, session_id, query, limit)
+                    logger.info("记忆读取最终结果 session_id={} count={}", session_id, len(result))
+                    return result
             except Exception as exc:
                 logger.warning("Redis get_relevant 失败，降级 PG: {}", exc)
                 self._redis_ok = False
@@ -196,13 +230,52 @@ class PersistentMemoryManager:
         # 2) 尝试 PostgreSQL
         if self._pg_ok:
             try:
-                return await self._pg.get_recent_messages(session_id, limit)
+                items = await self._pg.get_recent_messages(session_id, limit)
+                logger.info("记忆读取 PostgreSQL session_id={} count={}", session_id, len(items))
+                if items:
+                    result = await self._append_long_term(items, session_id, query, limit)
+                    logger.info("记忆读取最终结果 session_id={} count={}", session_id, len(result))
+                    return result
             except Exception as exc:
                 logger.warning("PG get_recent_messages 失败，降级内存: {}", exc)
                 self._pg_ok = False
 
         # 3) 最终兜底
-        return await self._fallback.get_relevant(session_id, query, limit)
+        items = await self._fallback.get_relevant(session_id, query, limit)
+        logger.info("记忆读取内存降级 session_id={} count={}", session_id, len(items))
+        result = await self._append_long_term(items, session_id, query, limit)
+        logger.info("记忆读取最终结果 session_id={} count={}", session_id, len(result))
+        return result
+
+    async def _append_long_term(
+        self,
+        short_items: list[str],
+        session_id: str,
+        query: str,
+        limit: int,
+    ) -> list[str]:
+        """如果启用了长期语义记忆，将召回结果插入最前面。"""
+        if self._long_term is None:
+            return short_items
+        try:
+            ltm_items = await self._long_term.recall(query, session_id, top_k=3)
+            if ltm_items:
+                logger.info(
+                    "记忆读取 Milvus session_id={} count={}",
+                    session_id,
+                    len(ltm_items),
+                )
+                semantic = [
+                    f"[历史记忆] {item.content}"
+                    for item in ltm_items
+                    if hasattr(item, "content")
+                ]
+                # 语义记忆插入最前面（重要性最高），然后接短期记忆，最后截断
+                combined = semantic + short_items
+                return combined[:limit]
+        except Exception as exc:
+            logger.warning("长期语义记忆召回失败，跳过: {}", exc)
+        return short_items
 
     async def append_turn(
         self,
@@ -211,23 +284,65 @@ class PersistentMemoryManager:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """双写：PostgreSQL（主）+ Redis（辅），同时写内存兜底。"""
+        """多写：PostgreSQL（主）+ Redis（辅）+ 内存兜底 + 长期语义记忆（Milvus）。"""
         # 内存兜底始终同步写入
         await self._fallback.append_turn(session_id, role, content, metadata)
+        logger.info(
+            "记忆写入内存 session_id={} role={} content_len={}",
+            session_id,
+            role,
+            len(content or ""),
+        )
 
         # PostgreSQL 主路径
         if self._pg_ok:
             try:
                 await self._pg.add_message(session_id, role, content, metadata)
+                logger.info("记忆写入 PostgreSQL 成功 session_id={} role={}", session_id, role)
             except Exception as exc:
-                logger.warning("PG append_turn 失败: {}", exc)
+                self._pg_ok = False
+                logger.warning("PG append_turn 失败，后续降级内存: {}", exc)
 
         # Redis 辅助路径
         if self._redis_ok and self._redis_stm is not None:
             try:
                 await self._redis_stm.append_turn(session_id, role, content, metadata)
+                logger.info("记忆写入 Redis 成功 session_id={} role={}", session_id, role)
             except Exception as exc:
                 logger.warning("Redis append_turn 失败: {}", exc)
+
+        # 长期语义记忆（Milvus）：写入旁路，失败不影响主流程。
+        # 此前只有召回（_append_long_term）接通，写入（store）从未被调用；
+        # 本次把每轮问答写入语义库，使"很久以前但语义相关的记忆"可被召回。
+        await self._append_long_term_turn(session_id, role, content, metadata)
+
+    async def _append_long_term_turn(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """写入长期语义记忆：只存有内容的 user / assistant 消息，失败静默降级。"""
+        if self._long_term is None:
+            return
+        text = (content or "").strip()
+        if not text or role not in ("user", "assistant"):
+            return
+        try:
+            await self._long_term.store(
+                session_id,
+                text,
+                dict(metadata or {}),
+            )
+            logger.info(
+                "记忆写入 Milvus 成功 session_id={} role={} content_len={}",
+                session_id,
+                role,
+                len(text),
+            )
+        except Exception as exc:
+            logger.warning("长期语义记忆写入失败，跳过: {}", exc)
 
     # ------------------------------------------------------------------
     # 会话管理接口（供 sessions.py 路由）
@@ -290,8 +405,9 @@ class PersistentMemoryManager:
 
         if self._redis_ok and self._redis_stm is not None:
             try:
-                await self._redis_stm.get_history(session_id)
-            except Exception:
-                pass  # Redis 中没有此 session 的记录不影响
+                await self._redis_stm.delete(session_id)
+                logger.info("记忆删除 Redis 成功 session_id={}", session_id)
+            except Exception as exc:
+                logger.warning("Redis delete_session 失败: {}", exc)
 
         return ok

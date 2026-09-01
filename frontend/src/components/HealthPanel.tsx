@@ -42,7 +42,7 @@ export default function HealthPanel({ onUpload, ragChunks, documents }: Props) {
             onClick={() => fileRef.current?.click()}
             className="w-full py-2 text-xs rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 font-medium transition-colors"
           >
-            + 检查报告 / 医学指南
+            + 上传文档
           </button>
           <p className="text-xs text-slate-400 mt-1">
             知识库: {ragChunks > 0 ? `${ragChunks} 个文本块` : '暂无内容'}
@@ -69,7 +69,7 @@ export default function HealthPanel({ onUpload, ragChunks, documents }: Props) {
       {/* 安全提示 */}
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
         <p className="text-xs text-amber-700 leading-relaxed">
-          ⚠️ 本助手提供健康参考建议，不能替代医生诊断。紧急情况请立即拨打 120。
+          知识库支持任意领域文档；当前默认展示心血管安全策略。
         </p>
       </div>
     </div>
