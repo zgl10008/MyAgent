@@ -15,9 +15,9 @@
 
 ## 界面预览
 
-| 智能咨询 | 健康趋势 | 用药管理 |
-| --- | --- | --- |
-| ![智能咨询](screenshots/chat.png) | ![健康趋势](screenshots/monitor.png) | ![用药管理](screenshots/medication.png) |
+| 健康咨询 | 健康档案 |
+| --- | --- |
+| ![健康咨询](screenshots/chat.png) | ![健康档案](screenshots/documents.png) |
 
 ## 架构
 
