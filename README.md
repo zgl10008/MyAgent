@@ -13,6 +13,12 @@
 - **工程健壮性**：LLM / Redis / Milvus 逐级降级、熔断保护、意图识别双通道、Agent 步骤追踪与可观测性埋点。
 - **完整评测体系**：RAG 检索/生成评测 + Agent 通过率 A/B 消融，附带可复现的评测夹具与脚本。
 
+## 界面预览
+
+| 智能咨询 | 健康趋势 | 用药管理 |
+| --- | --- | --- |
+| ![智能咨询](screenshots/chat.png) | ![健康趋势](screenshots/monitor.png) | ![用药管理](screenshots/medication.png) |
+
 ## 架构
 
 ```mermaid
