@@ -1,82 +1,111 @@
-# 通用 Agent/RAG 平台 — 心血管慢病默认 Demo
+# HeartGuard · 心血管慢病管理 AI Agent
 
-一个可插拔领域的 Agent/RAG 工程平台：用户上传任意领域的 PDF、TXT 或 Markdown 文档后，系统会完成解析、分块、混合检索和带引用回答。心血管慢病管理是默认 Demo，用来展示高风险领域的安全分流、回答边界和完整产品体验。
+一个可插拔领域的 **Agent / RAG 工程底座**，以心血管慢病管理为默认 Demo，完整落地了多范式 Agent 编排、混合检索增强生成（RAG）、可插拔领域安全策略与分层记忆。
 
-> 产品定位：**通用 Agent/RAG 底座 + 心血管默认领域插件**。通用底座不绑定医疗；医疗 Prompt、风险关键词和免责声明只在 cardiovascular 策略下启用。
-
----
+> 定位：**通用 Agent/RAG 底座 + 心血管领域插件**。通用底座不绑定医疗；医疗 Prompt、风险关键词与免责声明仅在 `cardiovascular` 策略下启用，用于展示高风险领域的安全分流与回答边界。
 
 ## 核心特性
 
-- **多范式 Agent**：`react` 与 `plan_execute`，按任务复杂度路由；Function Calling 可作为工具调用后端。
-- **混合 RAG**：BM25（jieba）+ 向量检索（Milvus Lite）双路召回，RRF 融合，可选重排序和引用回答。
-- **可插拔领域策略**：`general` 处理通用文档，`cardiovascular` 增加医疗安全提示；后续可扩展其他领域。
-- **分层记忆**：Redis 短期状态 → PostgreSQL 持久化 → 内存降级；长期语义记忆使用向量存储。
-- **工程健壮性**：LLM/Redis/Milvus 降级、熔断、意图识别双通道、Agent 步骤追踪和反思评分。
+- **多范式 Agent 编排**：`react` 与 `plan_execute` 两种范式按任务复杂度路由，支持 Function Calling 作为工具调用后端，含失败降级与反思评分。
+- **混合检索 RAG**：BM25（jieba 分词）+ 向量检索（Milvus Lite）双路召回，RRF 融合，可选 Cross-Encoder 重排序，回答带来源引用。
+- **可插拔领域策略**：`general` 处理通用文档，`cardiovascular` 叠加医疗安全提示、风险分级与拒答门控，可横向扩展更多领域。
+- **分层记忆**：Redis 短期会话状态 → PostgreSQL 持久化 → 内存降级；长期语义记忆走向量存储。
+- **工程健壮性**：LLM / Redis / Milvus 逐级降级、熔断保护、意图识别双通道、Agent 步骤追踪与可观测性埋点。
+- **完整评测体系**：RAG 检索/生成评测 + Agent 通过率 A/B 消融，附带可复现的评测夹具与脚本。
 
-## 运行模式
+## 架构
+
+```mermaid
+flowchart LR
+    subgraph Client
+        UI[React 前端]
+    end
+    subgraph API[FastAPI 服务]
+        Router[意图识别 / 模式路由]
+        Agent[Agent 编排器]
+        RAG[混合检索 RAG]
+        Mem[分层记忆]
+        Tools[工具注册表]
+    end
+    subgraph Infra[基础设施]
+        LLM[OpenAI 兼容 LLM]
+        Vec[Milvus Lite 向量库]
+        Redis[Redis]
+        PG[PostgreSQL]
+    end
+    UI --> API
+    Router --> Agent
+    Agent --> RAG
+    Agent --> Mem
+    Agent --> Tools
+    Agent --> LLM
+    RAG --> Vec
+    Mem --> Redis
+    Mem --> PG
+```
+
+## 快速开始
 
 ### 最小本地模式
 
-只需要 Python、一个 OpenAI-compatible API Key 和前端 Node 环境。PostgreSQL、Redis 或 Milvus Lite 不可用时，项目会按现有链路降级；Milvus Lite 默认使用本地 `milvus.db`，无法初始化时退化为内存向量库。
+仅需 Python 3.11+、一个 OpenAI 兼容 API Key 与 Node 环境；PostgreSQL / Redis / Milvus 不可用时按链路自动降级。
 
 ```bash
 python -m venv .venv
-.venv\\Scripts\\activate       # Windows
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env
-# 编辑 .env，至少填写 OPENAI_API_KEY
-python -m uvicorn app.main:app --port 8001
+cp .env.example .env               # 编辑 .env，至少填写 OPENAI_API_KEY
+python -m uvicorn app.main:app --port 8000
+```
+
+```bash
+# 前端
+cd frontend
+npm install
+npm run dev
 ```
 
 ### 完整 Docker Compose 模式
 
-完整模式提供 PostgreSQL、Redis 和 Milvus standalone，适合演示持久化和独立向量服务；首次启动成本更高，不是本地快速体验的必选项。
+提供 PostgreSQL、Redis 与 Milvus standalone，适合演示持久化与独立向量服务。
 
 ```bash
 docker compose up --build
 ```
 
-PostgreSQL 负责业务数据和持久化记忆，Redis 负责短期会话与 TTL，VectorStore 负责文档向量检索；内存仅用于开发和故障降级。当前保留 Milvus Lite，未来可以在不改 RAG 业务层的前提下增加 pgvector 实现。
+## 技术栈
 
-## 快速验证
+- **后端**：Python 3.11+ · FastAPI · Pydantic v2 · SQLAlchemy async · LangGraph / LangChain
+- **检索**：BM25 · jieba · RRF · Milvus Lite · bge-m3 / bge-reranker-v2-m3
+- **前端**：React 19 · TypeScript · Vite · Tailwind CSS 4 · Recharts
+- **基础设施**：Redis · PostgreSQL · Docker Compose
 
-```bash
-curl http://localhost:8001/api/v1/health
-curl -X POST http://localhost:8001/api/v1/chat/agent ^
-  -H "Content-Type: application/json" ^
-  -d "{\"messages\":[{\"role\":\"user\",\"content\":\"帮我算 123*456\"}],\"agent_mode\":\"auto\",\"domain\":\"general\"}"
-```
-
-## 技术栈与文档
-
-后端使用 Python 3.11+、FastAPI、Pydantic v2、SQLAlchemy async、LangGraph/LangChain 和 OpenAI-compatible API；检索使用 BM25、jieba、RRF、Milvus Lite；前端使用 React、TypeScript、Vite 和 Tailwind CSS。
-
-- [项目全景文档](docs/File/项目全景文档.md)
-- [项目工作流程举例](docs/File/项目工作流程举例.md)
-- [评估报告-混合检索](docs/File/评估报告-混合检索.md)
-- [面试问答](docs/File/面试问答20题.md)
-- [秋招项目改进与架构决策](docs/File/秋招项目改进评估与架构决策.md)
-
-## 测试
-
-```bash
-python -m pytest
-ruff check app tests
-```
-
-测试数量和评测数字以当前环境实际运行结果为准；评测脚本、查询标注和历史实验报告位于 `scripts/` 与 `docs/File/`。
-
-## 目录结构
+## 项目结构
 
 ```text
-app/                 # FastAPI、Agent、RAG、领域策略、记忆与工具
-frontend/            # React + TypeScript 前端
-docs/File/           # 项目文档、评估与面试材料
-scripts/             # RAG 评估脚本
-tests/               # 离线单元测试
+app/
+  core/agent/          # 多范式 Agent：react / plan_execute / function calling / 反思
+  core/rag/            # 混合检索、重排序、生成
+  core/memory/         # 短期 / 长期语义记忆
+  core/intent/         # 意图识别与领域路由
+  core/tools/          # 工具注册表与内置工具（计算、检索、搜索）
+  infrastructure/      # LLM 路由、熔断、向量库、缓存、追踪
+  api/                 # FastAPI 路由与上传校验
+frontend/              # React + TypeScript 前端
+scripts/               # 评测与知识库工具脚本
+tests/                 # 离线单元测试
+```
+
+## 测试与评测
+
+```bash
+python -m pytest                 # 单元测试
+ruff check app tests             # 静态检查
+python scripts/regression_check.py --standalone   # RAG 回归门禁
+python scripts/eval_rag.py       # RAG 检索/生成评测
+python scripts/eval_agent.py     # Agent 通过率评测
 ```
 
 ## License
 
-MIT
+[MIT](LICENSE)

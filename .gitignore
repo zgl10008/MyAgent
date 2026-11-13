@@ -61,8 +61,14 @@ frontend/dist/
 .cache/
 .pytest_cache/
 
-# Claude Code 本地工作区（临时 worktree，不入库）
-.claude/worktrees/
+# Claude Code 本地配置（settings.json、worktrees 等，不入库）
+.claude/
 
 # 本地下载的模型权重（bge-m3 等，体积大，不入库）
 models/
+
+# 作品集清爽化：本地文档、评测报告与临时产物不入库
+docs/
+scripts/*.log
+scripts/_*
+scripts/*report*.md
