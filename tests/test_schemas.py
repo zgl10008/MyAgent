@@ -51,3 +51,11 @@ def test_retrieval_result_defaults():
 def test_rag_chat_request_top_k_bounds():
     with pytest.raises(ValidationError):
         RAGChatRequest(messages=[{"role": "user", "content": "hi"}], top_k=100)
+
+
+def test_rag_chat_request_accepts_conversation_id():
+    request = RAGChatRequest(
+        messages=[{"role": "user", "content": "hi"}],
+        conversation_id="session-1",
+    )
+    assert request.conversation_id == "session-1"

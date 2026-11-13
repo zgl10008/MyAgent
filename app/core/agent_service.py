@@ -144,7 +144,10 @@ class AgentService:
         # 2. 工具注册
         self._tool_registry = ToolRegistry()
         self._tool_registry.register(CalculatorTool())
-        self._tool_registry.register(WebSearchTool(timeout=settings.search_timeout))
+        self._tool_registry.register(WebSearchTool(
+            timeout=settings.search_timeout,
+            mock=settings.mock_web_search,
+        ))
         self._tool_adapter = _ToolRegistryAdapter(self._tool_registry)
 
         # 3. 记忆（Redis 热路径 + PostgreSQL 冷存储 + 内存降级）
@@ -347,15 +350,15 @@ class AgentService:
         )
         logger.info("ModeRouter 已就绪（规则快路径 + LLM Router 兜底）")
 
-        # 5. 编排器配置
+        # 5. 编排器配置（三开关来自 settings，默认全开；评测 A/B 消融通过 env 关闭）
         orchestrator_config = _DictConfig(
             {
-                "enable_reflection": True,
-                "fallback_react_on_plan_failure": True,
+                "enable_reflection": settings.agent_enable_reflection,
+                "fallback_react_on_plan_failure": settings.agent_fallback_react_on_plan_failure,
                 "react_max_steps": 10,
-                "max_replan_attempts": 2,
+                "max_replan_attempts": settings.agent_max_replan_attempts,
                 "reflection_min_quality": 60,
-                "use_function_calling": True,
+                "use_function_calling": settings.agent_use_function_calling,
             }
         )
 
@@ -371,39 +374,7 @@ class AgentService:
         # 7. FunctionCall Agent（ReAct 的 FC 后端，非独立模式）
         # 当 use_function_calling=True 时，ReAct 和 Plan-and-Execute 子任务都使用此 backend
         try:
-            from pydantic import BaseModel, Field, create_model
-            from langchain_core.tools import StructuredTool
-
-            _fc_tools: list = []
-            for t in self._tool_registry.get_all_tools():
-                # 从工具参数动态构建 Pydantic args_schema
-                fields: dict[str, Any] = {}
-                for param in t.parameters:
-                    field_kwargs: dict = {"description": param.description}
-                    if param.required:
-                        fields[param.name] = (str, Field(**field_kwargs))
-                    else:
-                        fields[param.name] = (str | None, Field(default=None, **field_kwargs))
-                if not fields:
-                    fields["query"] = (str, Field(description="查询参数"))
-
-                ToolArgs = create_model(f"{t.name}_args", **fields)
-
-                # 用默认参数固化当前 tool 引用（避免闭包延迟绑定问题）
-                def _make_executor(tool=t):
-                    async def _execute(**kwargs: Any) -> str:
-                        filtered = {k: v for k, v in kwargs.items() if v is not None}
-                        return await tool.execute(**filtered)
-                    _execute.__name__ = tool.name
-                    return _execute
-
-                fc_tool = StructuredTool.from_function(
-                    coroutine=_make_executor(),
-                    name=t.name,
-                    description=t.description,
-                    args_schema=ToolArgs,
-                )
-                _fc_tools.append(fc_tool)
+            _fc_tools = self._build_function_call_tools()
 
             self._function_call_agent = FunctionCallAgent(
                 model_name=settings.openai_model,
@@ -419,6 +390,55 @@ class AgentService:
             logger.warning("FunctionCall Agent 创建失败，function_call 模式不可用: {}", exc)
 
         logger.info("AgentService 初始化完成")
+
+    def _build_function_call_tools(self) -> list[Any]:
+        """Build LangChain tools from the current registry snapshot."""
+        from langchain_core.tools import StructuredTool
+        from pydantic import Field, create_model
+
+        parameter_types: dict[str, type[Any]] = {
+            "string": str,
+            "integer": int,
+            "number": float,
+            "boolean": bool,
+            "object": dict,
+            "array": list,
+        }
+        fc_tools: list[Any] = []
+        for tool in self._tool_registry.get_all_tools():
+            fields: dict[str, Any] = {}
+            for param in tool.parameters:
+                python_type = parameter_types.get(param.type, str)
+                field_kwargs = {"description": param.description}
+                if param.required:
+                    fields[param.name] = (python_type, Field(**field_kwargs))
+                else:
+                    fields[param.name] = (
+                        python_type | None,
+                        Field(default=None, **field_kwargs),
+                    )
+            if not fields:
+                fields["query"] = (str, Field(description="查询参数"))
+
+            tool_args = create_model(f"{tool.name}_args", **fields)
+
+            def _make_executor(current_tool=tool):
+                async def _execute(**kwargs: Any) -> str:
+                    filtered = {k: v for k, v in kwargs.items() if v is not None}
+                    return await current_tool.execute(**filtered)
+
+                _execute.__name__ = current_tool.name
+                return _execute
+
+            fc_tools.append(
+                StructuredTool.from_function(
+                    coroutine=_make_executor(),
+                    name=tool.name,
+                    description=tool.description,
+                    args_schema=tool_args,
+                )
+            )
+        return fc_tools
 
     @property
     def memory(self) -> PersistentMemoryManager:
@@ -445,11 +465,16 @@ class AgentService:
         )
         self._tool_registry.register(rag_tool)
 
+        # FunctionCallAgent 在服务初始化时会捕获一次工具快照；RAG 属于后注入
+        # 工具，因此注册后必须刷新绑定，否则 FC 主链路无法看到 rag_search。
+        if hasattr(self, "_function_call_agent"):
+            self._function_call_agent.set_tools(self._build_function_call_tools())
+
         # 更新 ModeRouter 的工具列表（用于 LLM Router 决策时感知可用能力）
         self._mode_router._tool_names = self._tool_adapter.list_tool_names()
 
         logger.info(
-            "RAGService 已注入并注册为 rag_search 工具（知识库块数: {}）",
+            "RAGService 已注入并同步到 Function Calling 工具集（知识库块数: {}）",
             rag_service.chunks_count,
         )
 
@@ -470,6 +495,22 @@ class AgentService:
             return RiskDecision(RiskDisposition.SAFE, reason="未命中高风险关键词")
         safety_llm = self._model_adapter.get_llm("safety")
         return await classify_risk(policy, text, safety_llm)
+
+    async def classify_safety(self, domain: str, text: str) -> RiskDecision:
+        """供所有聊天入口复用的统一医疗安全分流。"""
+        return await self._classify_safety(get_domain_policy(domain), text)
+
+    async def persist_exchange(
+        self,
+        session_id: str,
+        user_text: str,
+        answer: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """统一写入一轮会话，供直连与 RAG 链路复用。"""
+        await self._memory.append_turn(session_id, "user", user_text)
+        if answer:
+            await self._memory.append_turn(session_id, "assistant", answer, metadata=metadata)
 
     async def _safety_response(
         self,
@@ -522,11 +563,19 @@ class AgentService:
             )
         #    意图识别与模式路由需要历史上下文才能处理追问/指代，如"那它呢？""还有吗？"。
         #    与编排器内部使用的同一份记忆（短期 + 长期语义），读取失败则按单轮处理。
-        history: list[str] = []
+        request_history = [
+            f"{message.role}: {message.content}"
+            for message in request.messages[:-1]
+            if message.content.strip()
+        ]
+        history: list[str] = list(request_history)
         try:
-            history = await self._memory.get_relevant(session_id, user_text, limit=6)
+            memory_history = await self._memory.get_relevant(session_id, user_text, limit=6)
+            for item in memory_history:
+                if item not in history:
+                    history.append(item)
         except Exception as exc:
-            logger.warning("读取历史上下文失败，意图/路由按单轮处理: {}", exc)
+            logger.warning("读取记忆上下文失败，仅使用请求历史: {}", exc)
 
         # 1. 意图识别（注入历史上下文）
         intent_result = await self._intent_recognizer.recognize(
@@ -588,6 +637,10 @@ class AgentService:
             action = s.get("action") or parsed.get("action")
             if action:
                 tool_names.add(str(action))
+            # plan_execute 子任务的工具名透传在 subtask_done 事件的 record.tools
+            _record = s.get("record") or {}
+            for _t in _record.get("tools") or []:
+                tool_names.add(str(_t))
             # thought: 优先 parsed（react 版），fallback 到 s（langgraph 版）
             thought = str(parsed.get("thought") or s.get("thought") or "")
             steps.append(

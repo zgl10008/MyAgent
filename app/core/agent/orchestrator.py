@@ -180,8 +180,8 @@ class AgentOrchestrator:
         return all_names
 
     def _safe_react_tools(self, intent: IntentContext) -> List[str]:
-        """排除被百度反爬墙挡住的 web_search；知识库可用时保留 rag_search。"""
-        return [t for t in self._tool_names(intent) if t != "web_search"]
+        """Return the intent-scoped tool whitelist used by fallback paths."""
+        return self._tool_names(intent)
 
     # ------------------------------------------------------------------
     # 创建 ReAct 执行器（供 react 模式和 plan_execute 子任务复用）
@@ -449,25 +449,16 @@ class AgentOrchestrator:
             steps.append(entry)
             self._tracer.log_event(trace_id, "plan_execute", entry)
 
-        # web_search 依赖百度，被反爬验证码墙挡住拿不到真实结果；
-        # PE 子任务一律排除 web_search，知识库可用时改走本地 rag_search。
+        # Plan-Execute 与 ReAct 使用同一份意图级工具白名单；具体工具失败时
+        # 返回可观察的错误信息，由执行器决定重试、重规划或改用其它工具。
         pe_tools = self._safe_react_tools(intent)
-        has_rag = "rag_search" in pe_tools
 
         def _sanitize_tools(allowed_tools: list[str] | None) -> list[str]:
             raw = list(allowed_tools) if allowed_tools else list(pe_tools)
-            out: list[str] = []
-            for t in raw:
-                if t == "web_search":
-                    if has_rag:
-                        out.append("rag_search")
-                    # 无本地知识库时直接丢弃 web_search，避免空转
-                else:
-                    out.append(t)
             # 去重保序，避免重复注册同一工具
             uniq: list[str] = []
             seen: set[str] = set()
-            for t in out:
+            for t in raw:
                 if t not in seen:
                     seen.add(t)
                     uniq.append(t)

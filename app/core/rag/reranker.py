@@ -18,6 +18,8 @@ class Reranker:
         self,
         model_name: str = "BAAI/bge-reranker-v2-m3",
         device: str | None = None,
+        batch_size: int = 4,
+        max_length: int = 384,
     ) -> None:
         """
         :param model_name: sentence-transformers CrossEncoder 模型名或路径
@@ -27,6 +29,8 @@ class Reranker:
         """
         self._model_name = model_name
         self._device = device
+        self._batch_size = batch_size
+        self._max_length = max_length
         self._model: Any = None
 
     def _load_model(self) -> Any:
@@ -40,7 +44,11 @@ class Reranker:
         kwargs: dict[str, Any] = {}
         if self._device:
             kwargs["device"] = self._device
-        self._model = CrossEncoder(self._model_name, **kwargs)
+        self._model = CrossEncoder(
+            self._model_name,
+            max_length=self._max_length,
+            **kwargs,
+        )
         return self._model
 
     async def rerank(
@@ -58,7 +66,7 @@ class Reranker:
         def _sync_predict() -> list[float]:
             model = self._load_model()
             pairs = [(query, d.content) for d in documents]
-            raw = model.predict(pairs)
+            raw = model.predict(pairs, batch_size=self._batch_size)
             if hasattr(raw, "tolist"):
                 return list(raw.tolist())  # type: ignore[no-any-return]
             return list(raw)

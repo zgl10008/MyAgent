@@ -27,10 +27,10 @@ function newConversationId(): string {
 
 type ChatMode = 'direct' | 'agent' | 'rag';
 
-async function callRag(messages: { role: string; content: string }[]): Promise<RAGChatResponse> {
+async function callRag(messages: { role: string; content: string }[], conversationId: string): Promise<RAGChatResponse> {
   const res = await fetch('/api/v1/chat/rag', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, mode: 'hybrid', top_k: 5, domain: 'cardiovascular' }),
+    body: JSON.stringify({ messages, mode: 'hybrid', top_k: 5, conversation_id: conversationId, domain: 'cardiovascular' }),
   });
   if (!res.ok) { const err = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(err.detail || `HTTP ${res.status}`); }
   return res.json();
@@ -129,13 +129,13 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
         setMessages((prev) => prev.map((m) => m.id === assistantMsg.id ? { ...m, content: resp.content } : m));
       } else if (actualMode === 'rag') {
         setRagLoading(true); setRagResult(null);
-        const resp = await callRag([...history, { role: 'user', content: text }]);
+        const resp = await callRag([...history, { role: 'user', content: text }], convId);
         setRagResult(resp);
         setMessages((prev) => prev.map((m) => m.id === assistantMsg.id ? { ...m, content: resp.answer } : m));
       } else {
         const res = await fetch('/api/v1/chat', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: [...history, { role: 'user', content: text }], temperature: 0.7, domain: 'cardiovascular' }),
+          body: JSON.stringify({ messages: [...history, { role: 'user', content: text }], temperature: 0.7, conversation_id: convId, domain: 'cardiovascular' }),
         });
         if (!res.ok) {
           const errBody = await res.json().catch(() => null);

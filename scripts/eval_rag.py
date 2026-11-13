@@ -244,6 +244,8 @@ class RAGEvaluator:
                 self._rag._reranker = Reranker(
                     model_name=settings.rerank_model,
                     device=settings.rerank_device or None,
+                    batch_size=settings.rerank_batch_size,
+                    max_length=settings.rerank_max_length,
                 )
             print(
                 f"rerank 消融已启用: model={settings.rerank_model}, "
@@ -289,6 +291,16 @@ class RAGEvaluator:
                     "elapsed_ms": round(qr.elapsed_ms, 2),
                     "top5_ids": qr.retrieved_ids[:5],
                     "hits_in_top5": len(set(qr.retrieved_ids[:5]) & tq.relevant_ids),
+                    # Evidence Hit@5：至少命中一个核心证据（grade=2）；未分级时退化为任一相关块。
+                    "evidence_hit5": bool(
+                        set(qr.retrieved_ids[:5])
+                        & ({rid for rid, grade in tq.rel_grades.items() if grade >= 2} or tq.relevant_ids)
+                    ),
+                    # Evidence Hit@10：Top-10 至少含一个核心证据（召回更深，命中率更高）。
+                    "evidence_hit10": bool(
+                        set(qr.retrieved_ids[:10])
+                        & ({rid for rid, grade in tq.rel_grades.items() if grade >= 2} or tq.relevant_ids)
+                    ),
                 }
             # 召回阶段覆盖度（candidate_k 候选集，喂给精排前的召回深度）。
             # 显式 rerank=False：stage_recall 测的是精排前的候选集，Recall@50 对
@@ -318,6 +330,10 @@ class RAGEvaluator:
 
         # 按查询类型分组（定位"哪个类型掉分"，而非笼统平均分）
         summary["by_type"] = self._build_type_summary(all_metrics, queries, self._modes)
+        # 库外/拒答样本没有相关 chunk，不应被计入检索 Recall 的分母。
+        summary["answerable"] = self._build_answerable_summary(
+            all_metrics, detailed, queries, self._modes
+        )
 
         # 召回阶段汇总：各模式在 candidate_k 深度的平均 Recall
         summary["stage_candidate_k"] = candidate_k
@@ -423,6 +439,43 @@ class RAGEvaluator:
             )
 
         return summary
+
+    def _build_answerable_summary(
+        self,
+        all_metrics: dict[str, list[EvalMetrics]],
+        detailed: list[dict[str, Any]],
+        queries: list[TestQuery],
+        modes: list[str],
+    ) -> dict[str, Any]:
+        """仅对有标准证据的问题汇总，补充更贴近问答可用性的 Evidence Hit@5。"""
+        indices = [i for i, query in enumerate(queries) if query.relevant_ids]
+        out: dict[str, Any] = {
+            "answerable_count": len(indices),
+            "out_of_scope_count": len(queries) - len(indices),
+            "recall5_macro_ceiling": round(
+                sum(min(5, len(queries[i].relevant_ids)) / len(queries[i].relevant_ids) for i in indices)
+                / len(indices), 4
+            ) if indices else 0.0,
+            "modes": {},
+        }
+        for mode in modes:
+            metrics = all_metrics.get(mode, [])
+            selected = [metrics[i] for i in indices if i < len(metrics)]
+            rows = [detailed[i]["modes"].get(mode, {}) for i in indices]
+            if not selected:
+                continue
+            out["modes"][mode] = {
+                "recall5": round(sum(m.recall.get(5, 0.0) for m in selected) / len(selected), 4),
+                "mrr": round(sum(m.mrr for m in selected) / len(selected), 4),
+                "ndcg5": round(sum(m.ndcg.get(5, 0.0) for m in selected) / len(selected), 4),
+                "evidence_hit5": round(
+                    sum(1 for row in rows if row.get("evidence_hit5")) / len(rows), 4
+                ),
+                "evidence_hit10": round(
+                    sum(1 for row in rows if row.get("evidence_hit10")) / len(rows), 4
+                ),
+            }
+        return out
 
     def _build_type_summary(
         self,
@@ -543,6 +596,28 @@ def generate_markdown_report(result: dict[str, Any], output_path: Path) -> str:
     lines.append(_build_metric_table(s, "ndcg", modes))
     lines.append("\n### MRR（平均倒数排名 — 越高越好）\n")
     lines.append(_build_mrr_table(s, modes))
+
+    answerable = s.get("answerable")
+    if answerable:
+        lines.append("\n### 可回答问题的证据检索（库外样本不计入 Recall）\n")
+        lines.append(
+            f"共 {answerable['answerable_count']} 条有标准证据的问题，"
+            f"{answerable['out_of_scope_count']} 条库外/拒答问题；"
+            f"该标注集的 Recall@5 宏平均理论上限为 {answerable['recall5_macro_ceiling']:.4f}。\n"
+        )
+        lines.append("| 模式 | Evidence Hit@5 | Evidence Hit@10 | Recall@5 | MRR | NDCG@5 |")
+        lines.append("|------|----------------|-----------------|----------|-----|---------|")
+        for mode in modes:
+            values = answerable.get("modes", {}).get(mode)
+            if values:
+                lines.append(
+                    f"| {mode} | {values['evidence_hit5']:.4f} | {values['evidence_hit10']:.4f} | "
+                    f"{values['recall5']:.4f} | {values['mrr']:.4f} | {values['ndcg5']:.4f} |"
+                )
+        lines.append(
+            "\n> Evidence Hit@K 衡量 Top-K 是否至少包含一个可支撑回答的核心证据；"
+            "Complete Recall@5 则衡量全部相关分块的覆盖度，两者不可互相替代。\n"
+        )
 
     # --- 按查询类型分组 ---
     by_type = s.get("by_type")

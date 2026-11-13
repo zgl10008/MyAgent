@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 from app.api.upload_validation import validate_upload
 from app.core.domain.policy import get_domain_policy
+from app.core.domain.risk_classifier import RiskDisposition
 from app.core.agent_service import AgentService
 from app.core.intent.recognizer import IntentRecognizer
 from app.core.rag_service import RAGService
@@ -80,11 +81,15 @@ async def chat(request: ChatRequest) -> ChatResponse:
     try:
         user_text = request.messages[-1].content if request.messages else ""
         policy = get_domain_policy(request.domain)
-        if policy.is_high_risk(user_text):
-            answer = policy.safety_prefix(user_text)
+        session_id = request.conversation_id or trace_id
+        agent = _get_agent()
+        safety = await agent.classify_safety(request.domain, user_text)
+        if safety.disposition is not RiskDisposition.SAFE:
+            answer = safety.answer or policy.clarify_notice
+            await agent.persist_exchange(session_id, user_text, answer, {"mode": safety.disposition.value})
             _tracer.end_span(
                 span,
-                result={"mode": "safety", "usage": {"total_steps": 0}},
+                result={"mode": safety.disposition.value, "usage": {"total_steps": 0}},
             )
             return ChatResponse(
                 id=str(uuid.uuid4()),
@@ -123,6 +128,9 @@ async def chat(request: ChatRequest) -> ChatResponse:
             max_tokens=request.max_tokens,
         )
         content = policy.with_boundary(resp.content, user_text)
+        await agent.persist_exchange(
+            session_id, user_text, content, {"mode": "direct", "trace_id": trace_id}
+        )
 
         _tracer.end_span(
             span,
@@ -161,9 +169,14 @@ async def _stream_generator(
     messages = [m.model_dump() for m in request.messages]
     policy = get_domain_policy(request.domain)
     user_text = request.messages[-1].content if request.messages else ""
-    if policy.is_high_risk(user_text):
+    session_id = request.conversation_id or trace_id
+    agent = _get_agent()
+    safety = await agent.classify_safety(request.domain, user_text)
+    if safety.disposition is not RiskDisposition.SAFE:
+        answer = safety.answer or policy.clarify_notice
+        await agent.persist_exchange(session_id, user_text, answer, {"mode": safety.disposition.value})
         yield b"data: " + json.dumps(
-            {"content": policy.safety_prefix(user_text), "trace_id": trace_id},
+            {"content": answer, "trace_id": trace_id},
             ensure_ascii=False,
         ).encode() + b"\n\n"
         yield b"data: " + json.dumps({"done": True}, ensure_ascii=False).encode() + b"\n\n"
@@ -172,6 +185,7 @@ async def _stream_generator(
     model = request.model or settings.openai_model
 
     try:
+        parts: list[str] = []
         stream = await client.chat.completions.create(
             model=model,
             messages=messages,
@@ -182,8 +196,19 @@ async def _stream_generator(
         async for chunk in stream:
             delta = chunk.choices[0].delta.content if chunk.choices else None
             if delta:
+                parts.append(delta)
                 payload = {"content": delta, "trace_id": trace_id}
                 yield b"data: " + json.dumps(payload, ensure_ascii=False).encode() + b"\n\n"
+        raw_content = "".join(parts)
+        content = policy.with_boundary(raw_content, user_text)
+        await agent.persist_exchange(
+            session_id, user_text, content, {"mode": "direct_stream", "trace_id": trace_id}
+        )
+        suffix = content[len(raw_content):]
+        if suffix:
+            yield b"data: " + json.dumps(
+                {"content": suffix, "trace_id": trace_id}, ensure_ascii=False
+            ).encode() + b"\n\n"
         yield b"data: " + json.dumps({"done": True}, ensure_ascii=False).encode() + b"\n\n"
     except Exception as exc:
         logger.exception("chat_stream 失败: {}", exc)
@@ -241,6 +266,14 @@ async def chat_rag(request: RAGChatRequest) -> RAGChatResponse:
     rag = _get_rag()
     try:
         query = request.query or request.messages[-1].content
+        trace_id = str(uuid.uuid4())
+        session_id = request.conversation_id or trace_id
+        agent = _get_agent()
+        safety = await agent.classify_safety(request.domain, query)
+        if safety.disposition is not RiskDisposition.SAFE:
+            answer = safety.answer or get_domain_policy(request.domain).clarify_notice
+            await agent.persist_exchange(session_id, query, answer, {"mode": safety.disposition.value})
+            return RAGChatResponse(answer=answer, model=get_settings().openai_model)
         history = [m.model_dump() for m in request.messages[:-1]]
 
         resp = await rag.chat(
@@ -251,13 +284,17 @@ async def chat_rag(request: RAGChatRequest) -> RAGChatResponse:
             domain=request.domain,
         )
 
-        return RAGChatResponse(
+        response = RAGChatResponse(
             answer=resp.answer,
             citations=resp.citations,
             contexts=resp.raw_contexts,
             model=resp.model or "",
             total_chunks=rag.chunks_count,
         )
+        await agent.persist_exchange(
+            session_id, query, response.answer, {"mode": "rag", "trace_id": trace_id}
+        )
+        return response
     except HTTPException:
         raise
     except Exception as exc:

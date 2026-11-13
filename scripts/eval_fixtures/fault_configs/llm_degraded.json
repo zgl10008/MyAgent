@@ -1,0 +1,6 @@
+{
+  "target": "react_llm",
+  "exception": "RuntimeError",
+  "message": "模型服务异常",
+  "expected_degraded": true
+}

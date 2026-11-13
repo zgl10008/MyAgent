@@ -204,6 +204,7 @@ class RAGChatRequest(BaseModel):
     query: str | None = Field(default=None, description="显式检索查询（为空则取最后一条消息）")
     mode: str = Field(default="hybrid", description="检索模式: vector / keyword / hybrid")
     top_k: int = Field(default=5, ge=1, le=20, description="检索数量")
+    conversation_id: str | None = Field(default=None, description="会话 ID；为空时由服务生成")
     domain: str = Field(default="cardiovascular", description="领域策略：general / cardiovascular")
 
 

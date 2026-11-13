@@ -1,0 +1,6 @@
+{
+  "target": "web_search",
+  "exception": "TimeoutError",
+  "message": "搜索服务超时",
+  "expected_degraded": true
+}

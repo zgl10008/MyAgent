@@ -76,13 +76,26 @@ class FunctionCallAgent:
         self._tools = {t.name: t for t in tools} if tools else {}
         self.max_steps = max(1, max_steps)
         self._memory = memory
+        self._llm: Any = None
+
+    def set_tools(self, tools: Sequence[Any]) -> None:
+        """Replace the tools exposed through Function Calling.
+
+        Some tools (notably ``rag_search``) are registered after the agent is
+        constructed.  Keeping the binding refreshable prevents the FC backend
+        from holding a stale snapshot of the registry.
+        """
+        self._all_tools = list(tools)
+        self._tools = {tool.name: tool for tool in self._all_tools}
 
     def _bind_llm(self, tools: Sequence[Any]) -> Any:
         """按给定工具子集构造 bind_tools 的 LLM。
 
         每次 run 依据 context["tool_names"] 过滤后再 bind，确保 FC 后端
-        尊重编排器的工具白名单（例如 PE 子任务排除被反爬墙挡住的 web_search）。
+        尊重编排器为当前意图和子任务生成的工具白名单。
         """
+        if self._llm is not None:
+            return self._llm
         return ChatOpenAI(
             model=self._model_name,
             api_key=self._api_key,
@@ -128,8 +141,8 @@ class FunctionCallAgent:
         extra_system = str(context.get("extra_system", ""))
         system_text = self._build_system(tool_descriptions, extra_system)
 
-        # 依据 context["tool_names"] 过滤本次可用工具；FC 后端此前 bind_tools 全量注入，
-        # 会绕过编排器传入的工具白名单，导致 PE 子任务仍能调用被排除的 web_search。
+        # 依据 context["tool_names"] 过滤本次可用工具，保证每个意图或
+        # Plan-Execute 子任务只能调用编排器分配的工具。
         tool_names = context.get("tool_names")
         if tool_names:
             allowed = set(tool_names)

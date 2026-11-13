@@ -263,6 +263,14 @@ class PlannerAgent:
                         error=str(exc),
                     )
 
+                # 透传该子任务实际调用的工具名，供上层汇总 tool_calls（否则
+                # plan_execute 的 tool_calls 恒为空——见 agent_service 的汇总逻辑）。
+                subtask_tools: list[str] = []
+                for _s in result.steps:
+                    _a = _s.get("action")
+                    if _a and str(_a) not in subtask_tools:
+                        subtask_tools.append(str(_a))
+
                 rec = {
                     "subtask_id": task.id,
                     "title": task.title,
@@ -270,6 +278,7 @@ class PlannerAgent:
                     "output": result.final_answer[:4000] if result.final_answer else "",
                     "error": result.error,
                     "steps": len(result.steps),
+                    "tools": subtask_tools,
                 }
                 subtask_results.append(rec)
                 if trace_callback:

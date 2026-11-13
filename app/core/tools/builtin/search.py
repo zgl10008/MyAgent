@@ -87,7 +87,7 @@ def parse_baidu_html(html_text: str) -> list[dict[str, str]]:
 class WebSearchTool(BaseTool):
     """网络搜索：百度网页搜索，国内直连、无需 API Key。"""
 
-    def __init__(self, timeout: float = 8.0) -> None:
+    def __init__(self, timeout: float = 8.0, mock: bool = False) -> None:
         super().__init__()
         self.name = "web_search"
         self.description = (
@@ -103,6 +103,7 @@ class WebSearchTool(BaseTool):
             )
         ]
         self._timeout = timeout
+        self._mock = mock
 
     async def execute(self, **kwargs: Any) -> str:
         query = str(kwargs.get("query", "")).strip()
@@ -111,6 +112,11 @@ class WebSearchTool(BaseTool):
         return await self._search_baidu(query)
 
     async def _search_baidu(self, query: str) -> str:
+        if self._mock:
+            return (
+                f"[mock] 网络搜索已屏蔽（query={query}）。"
+                "评测模式下不真实调用百度，请基于此占位结果继续执行任务。"
+            )
         params = {"wd": query, "rn": 5, "ie": "utf-8"}
         try:
             async with httpx.AsyncClient(

@@ -15,13 +15,14 @@ class _FakeCrossEncoder:
     def __init__(self, scores: list[float]) -> None:
         self._scores = list(scores)
 
-    def predict(self, pairs):
+    def predict(self, pairs, batch_size: int):
+        assert batch_size > 0
         return self._scores
 
 
-def _reranker_with_scores(scores: list[float]) -> Reranker:
+def _reranker_with_scores(scores: list[float], batch_size: int = 4) -> Reranker:
     """构造一个 _load_model 被替换为假模型的 Reranker。"""
-    r = Reranker()
+    r = Reranker(batch_size=batch_size, max_length=384)
     r._load_model = lambda: _FakeCrossEncoder(scores)  # type: ignore[method-assign]
     return r
 
@@ -56,3 +57,10 @@ async def test_rerank_reorders_and_attaches_score():
     # 原始对象不被原地修改（model_copy deep）
     assert docs[0].metadata == {}
     assert docs[0].score == 0.9
+
+
+@pytest.mark.asyncio
+async def test_rerank_uses_configured_batch_size():
+    r = _reranker_with_scores([0.5], batch_size=2)
+    out = await r.rerank("q", [RetrievalResult(id="d1", content="text")])
+    assert [doc.id for doc in out] == ["d1"]

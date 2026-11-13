@@ -43,7 +43,9 @@ class DocumentParser:
         """从内存字节解析。"""
         mime = mime_type or "application/octet-stream"
         lower = filename.lower()
-        if lower.endswith(".txt") or (mime.startswith("text/") and mime != "text/html"):
+        if lower.endswith((".txt", ".md", ".markdown")) or (
+            mime.startswith("text/") and mime != "text/html"
+        ):
             text = data.decode("utf-8", errors="ignore")
             return ParsedDocument(text=text[: self._max_chars], mime_type=mime, meta={})
 

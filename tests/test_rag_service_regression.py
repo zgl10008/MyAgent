@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from app.core.rag_service import _BM25, _tokenize
+from app.core.rag_service import RAGService, _BM25, _tokenize
 
 
 def test_tokenize_splits_chinese_into_words():
@@ -29,3 +29,14 @@ def test_bm25_chinese_search_works_with_jieba():
     index.add("d2", "糖尿病患者的血糖控制目标")
     hits = index.search("高血压 食盐", top_k=2)
     assert hits[0][0] == "d1"
+
+
+def test_document_catalog_survives_service_restart(tmp_path):
+    first = object.__new__(RAGService)
+    first._catalog_path = tmp_path / "rag_documents.json"
+    first._documents = {"guide.txt": {"id": "d1", "filename": "guide.txt", "chunk_count": 2}}
+    first._save_catalog()
+
+    second = object.__new__(RAGService)
+    second._catalog_path = first._catalog_path
+    assert second._load_catalog() == first._documents

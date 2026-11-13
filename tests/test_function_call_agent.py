@@ -14,6 +14,25 @@ class _FakeResponse:
         self.tool_calls = tool_calls or []
 
 
+class _NamedTool:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def test_fc_agent_can_refresh_late_registered_tools():
+    agent = FunctionCallAgent(
+        model_name="test-model",
+        api_key="test-key",
+        base_url="http://localhost:1/v1",
+        tools=[_NamedTool("calculator")],
+    )
+
+    agent.set_tools([_NamedTool("calculator"), _NamedTool("rag_search")])
+
+    assert [tool.name for tool in agent._all_tools] == ["calculator", "rag_search"]
+    assert set(agent._tools) == {"calculator", "rag_search"}
+
+
 class _FakeInvokeLLM:
     """模拟 ChatOpenAI.bind_tools() 的 ainvoke 返回，记录每次的 messages。"""
 
@@ -133,7 +152,7 @@ async def test_fc_agent_multiple_tool_calls_builds_valid_history():
     )
     agent._llm = fake_llm
 
-    async def fake_invoke_tool(name: str, args: dict) -> str:
+    async def fake_invoke_tool(name: str, args: dict, tool_map: dict) -> str:
         return f"obs:{name}:{args.get('query')}"
 
     agent._invoke_tool = fake_invoke_tool

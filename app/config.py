@@ -56,6 +56,11 @@ class Settings(BaseSettings):
         description="网络搜索（百度）请求超时（秒）",
     )
 
+    mock_web_search: bool = Field(
+        default=False,
+        description="评测时 mock 百度搜索：秒回占位结果、不真打百度，避免搜索超时拖慢评测",
+    )
+
     hf_endpoint: str = Field(
         default="https://hf-mirror.com",
         description="HuggingFace 镜像（国内加速）",
@@ -83,9 +88,18 @@ class Settings(BaseSettings):
     )
     rerank_candidate_k: int = Field(
         default=50,
-        description="精排前召回的候选数量（cross-encoder 只对候选集打分，避免全库精排过慢）。"
-        "默认 50：rerank 深度消融（scripts/eval_rag.py --rerank-candidate-k 20/50）显示"
-        "50 深度比 20 多 ~3pp Recall@5 / ~5pp MRR 精排增益，且 916 块库上精排 50 候选开销可忽略。",
+        description="精排前召回的候选数量（cross-encoder 只对候选集打分）。"
+        "默认 50 用于保留召回覆盖率；延迟敏感或显存有限时可降低到 20。",
+    )
+    rerank_batch_size: int = Field(
+        default=4,
+        ge=1,
+        description="Cross-Encoder 单次 GPU 推理的候选对数量；显存有限时降低此值以避免长文档精排卡顿",
+    )
+    rerank_max_length: int = Field(
+        default=384,
+        ge=64,
+        description="Cross-Encoder 输入的最大 token 长度，用于限制长候选的显存与推理开销",
     )
     rerank_device: str = Field(
         default="",
@@ -104,6 +118,26 @@ class Settings(BaseSettings):
     safety_risk_classifier_enabled: bool = Field(
         default=True,
         description="医疗安全门是否启用 LLM 二次确认（区分正在发作/询问知识/既往史，降低关键词误拦）",
+    )
+
+    # 编排器开关：默认全开（生产行为），评测 A/B 消融时通过 env 关闭。
+    # A/B 消融只变「重规划」与「反思」两项，其余（FC、失败降级）两组保持一致。
+    agent_use_function_calling: bool = Field(
+        default=True,
+        description="ReAct/Plan 子任务是否走 Function Calling 结构化后端（False=纯文本解析）",
+    )
+    agent_enable_reflection: bool = Field(
+        default=True,
+        description="是否启用反思重试（质量低于阈值时触发自我反思再回答）",
+    )
+    agent_fallback_react_on_plan_failure: bool = Field(
+        default=True,
+        description="Plan-and-Execute 失败时是否降级回 ReAct",
+    )
+    agent_max_replan_attempts: int = Field(
+        default=2,
+        ge=0,
+        description="Plan-and-Execute 子任务失败时的最大重规划次数（0=不重规划）",
     )
 
     log_level: str = Field(default="INFO", description="日志级别")

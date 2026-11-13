@@ -12,11 +12,13 @@ RAG 服务：基于 Milvus Lite（嵌入式向量库）+ sentence-transformers �
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import re
 import time
 import uuid
 import zlib
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -616,7 +618,10 @@ class RAGService:
         settings = get_settings()
         self._chunker = DocumentChunker(chunk_size=512, chunk_overlap=64)
         self._parser = DocumentParser()
-        self._documents: dict[str, dict[str, Any]] = {}  # filename → meta
+        # 文档清单与向量块分开持久化：Milvus Lite 保存向量，清单保存文件级元数据。
+        # 相比仅保存在进程内存，重启后仍可列出和删除已摄入文档。
+        self._catalog_path = self._resolve_catalog_path(settings.milvus_db_path)
+        self._documents: dict[str, dict[str, Any]] = self._load_catalog()
 
         # 初始化向量存储
         self._db_path = settings.milvus_db_path or "milvus.db"
@@ -670,6 +675,8 @@ class RAGService:
             self._reranker = Reranker(
                 model_name=settings.rerank_model,
                 device=settings.rerank_device or None,
+                batch_size=settings.rerank_batch_size,
+                max_length=settings.rerank_max_length,
             )
             logger.info(
                 "RAG 启用 cross-encoder 精排: model={}, candidate_k={}",
@@ -683,6 +690,59 @@ class RAGService:
             embed_dim,
             self._store.count,
         )
+
+        self._recover_legacy_documents()
+
+    @staticmethod
+    def _resolve_catalog_path(db_path: str) -> Path:
+        path = Path(db_path or "milvus.db")
+        # Docker 的 Milvus Lite 位于挂载卷 /data；本地相对路径则放入已忽略的 data/。
+        if path.is_absolute():
+            return path.parent / "rag_documents.json"
+        return Path("data") / "rag_documents.json"
+
+    def _load_catalog(self) -> dict[str, dict[str, Any]]:
+        try:
+            if not self._catalog_path.exists():
+                return {}
+            raw = json.loads(self._catalog_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError("文档清单格式不是对象")
+            return {str(k): dict(v) for k, v in raw.items() if isinstance(v, dict)}
+        except Exception as exc:
+            logger.warning("读取 RAG 文档清单失败，将以空清单启动: {}", exc)
+            return {}
+
+    def _save_catalog(self) -> None:
+        self._catalog_path.parent.mkdir(parents=True, exist_ok=True)
+        temp = self._catalog_path.with_suffix(".tmp")
+        temp.write_text(
+            json.dumps(self._documents, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        temp.replace(self._catalog_path)
+
+    def _recover_legacy_documents(self) -> None:
+        """为旧版只有 Milvus 分块、没有清单的数据生成可管理的最小元数据。"""
+        try:
+            sources = self._store.list_sources()
+        except Exception as exc:
+            logger.warning("读取已有 RAG 来源失败: {}", exc)
+            return
+        changed = False
+        for source in sources:
+            if source and source not in self._documents:
+                self._documents[source] = {
+                    "id": f"legacy-{uuid.uuid5(uuid.NAMESPACE_URL, source)}",
+                    "filename": source,
+                    "mime_type": None,
+                    "chunk_count": 0,
+                    "char_count": 0,
+                    "uploaded_at": 0.0,
+                    "status": "legacy",
+                }
+                changed = True
+        if changed:
+            self._save_catalog()
 
     def _make_llm_adapter(self) -> Any:
         class _LLMAdapter:
@@ -751,7 +811,20 @@ class RAGService:
         filename: str,
         mime_type: str | None = None,
     ) -> int:
-        """摄入文件（PDF/TXT 等）。"""
+        """兼容旧调用方：摄入文件并返回分块数量。"""
+        document = await self.ingest_document(data, filename, mime_type)
+        return int(document["chunk_count"])
+
+    async def ingest_document(
+        self,
+        data: bytes,
+        filename: str,
+        mime_type: str | None = None,
+    ) -> dict[str, Any]:
+        """摄入文件并持久化文件级元数据，作为唯一 RAG 上传入口。"""
+        # 同名文件采用替换语义，避免同一 source 的旧向量残留并造成重复召回。
+        if filename in self._documents:
+            self.delete_document(filename)
         parsed = self._parser.parse_bytes(data, filename, mime_type)
         if not parsed.text.strip():
             logger.warning("文件解析结果为空: {}", filename)
@@ -769,15 +842,25 @@ class RAGService:
         else:
             for did, c, emb, src in items:
                 self._store.add(did, c, emb, src)
-        self._documents[filename] = {
+        document = {
+            "id": str(uuid.uuid4()),
             "filename": filename,
             "mime_type": mime_type or parsed.mime_type,
             "chunk_count": len(chunks),
             "char_count": len(parsed.text),
             "uploaded_at": time.time(),
+            "status": "ready",
         }
+        self._documents[filename] = document
+        try:
+            self._save_catalog()
+        except Exception:
+            # 清单保存失败时清理刚写入的向量，避免产生无法管理的孤儿分块。
+            self._store.remove_by_source(filename)
+            self._documents.pop(filename, None)
+            raise
         logger.info("RAG 摄入文件: {} → {} 块", filename, len(chunks))
-        return len(chunks)
+        return document
 
     def list_documents(self) -> list[dict[str, Any]]:
         docs = list(self._documents.values())
@@ -789,6 +872,7 @@ class RAGService:
             return False
         n = self._store.remove_by_source(filename)
         del self._documents[filename]
+        self._save_catalog()
         logger.info("RAG 删除文档: {} (移除 {} 块)", filename, n)
         return True
 
