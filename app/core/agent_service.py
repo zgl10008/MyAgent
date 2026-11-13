@@ -7,6 +7,7 @@ Agent 服务：串联编排器、记忆、工具、追踪、意图识别的顶�
 
 from __future__ import annotations
 
+import contextvars
 import time
 import uuid
 from typing import Any
@@ -42,6 +43,7 @@ from app.models.schemas import (
     AgentChatResponse,
     ChatMessage,
     IntentInfo,
+    RetrievalResult,
     StepInfo,
 )
 
@@ -79,6 +81,43 @@ class _ToolRegistryAdapter:
 # ==============================================================================
 
 
+class _UsageAccumulator:
+    """单次请求的 token 用量累加器。
+
+    由 contextvar 承载，保证并发请求各自独立统计，互不串扰。
+    """
+
+    def __init__(self) -> None:
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+
+    def add(self, usage: dict[str, Any] | None) -> None:
+        if not usage:
+            return
+        self.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+        self.completion_tokens += int(usage.get("completion_tokens") or 0)
+        self.total_tokens += int(usage.get("total_tokens") or 0)
+
+    def snapshot(self) -> dict[str, int]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+
+# 当前请求的 token 用量累加器（contextvar：每个请求任务独立上下文）
+_usage_ctx: contextvars.ContextVar[_UsageAccumulator | None] = contextvars.ContextVar(
+    "agent_token_usage", default=None
+)
+
+# 当前请求 Agent 通过 rag_search 检索到的文档上下文（contextvar，供前端右侧面板展示）
+_rag_contexts_ctx: contextvars.ContextVar[list[RetrievalResult] | None] = contextvars.ContextVar(
+    "agent_rag_contexts", default=None
+)
+
+
 class _ModelRouterAdapter:
     """适配 ModelRouter 使 get_llm(purpose) 返回可 acomplete 的对象。"""
 
@@ -88,6 +127,12 @@ class _ModelRouterAdapter:
     def get_llm(self, purpose: str = "react") -> Any:
         """返回一个带有 acomplete 方法的简易 LLM 包装。"""
         return _LLMWrapper(self._router)
+
+    def add_usage(self, usage: dict[str, Any] | None) -> None:
+        """供 FunctionCall 后端把本次 LLM 调用 token 计入当前请求。"""
+        acc = _usage_ctx.get()
+        if acc is not None:
+            acc.add(usage)
 
 
 class _LLMWrapper:
@@ -100,6 +145,9 @@ class _LLMWrapper:
         self, messages: list[dict[str, str]], **kwargs: Any
     ) -> str:
         resp = await self._router.chat(messages, **kwargs)
+        acc = _usage_ctx.get()
+        if acc is not None:
+            acc.add(resp.usage)
         return resp.content
 
 
@@ -383,6 +431,7 @@ class AgentService:
                 tools=_fc_tools,
                 max_steps=int(orchestrator_config.get("react_max_steps", 10)),
                 memory=self._memory,
+                usage_callback=self._model_adapter.add_usage,
             )
             self._orchestrator.set_function_call_agent(self._function_call_agent)
             logger.info("FunctionCall Agent 已注入编排器（function_call 模式可用）")
@@ -457,7 +506,17 @@ class AgentService:
 
         # 将 RAG 检索封装为工具，注册到工具系统中
         async def _search(query: str, top_k: int = 5) -> list:
-            return await rag_service.search(query, top_k=top_k, mode="hybrid")
+            results = await rag_service.search(query, top_k=top_k, mode="hybrid")
+            # 记录结构化检索结果，供前端右侧面板展示（Agent 模式也可见）
+            acc = _rag_contexts_ctx.get()
+            if acc is not None:
+                existing_ids = {getattr(r, "id", None) for r in acc}
+                for r in results:
+                    rid = getattr(r, "id", None)
+                    if rid not in existing_ids:
+                        acc.append(r)
+                        existing_ids.add(rid)
+            return results
 
         rag_tool = RAGSearchTool(
             search_func=_search,
@@ -512,6 +571,13 @@ class AgentService:
         if answer:
             await self._memory.append_turn(session_id, "assistant", answer, metadata=metadata)
 
+    def _snapshot_usage(self, total_steps: int) -> dict[str, int]:
+        """读取当前请求已累计的 token 用量，并附上执行步骤数。"""
+        acc = _usage_ctx.get()
+        usage = acc.snapshot() if acc else {}
+        usage["total_steps"] = total_steps
+        return usage
+
     async def _safety_response(
         self,
         trace_id: str,
@@ -529,7 +595,7 @@ class AgentService:
             model=request.model or get_settings().openai_model,
             content=answer,
             trace_id=trace_id,
-            usage={"total_steps": 0},
+            usage=self._snapshot_usage(0),
             agent_mode=mode,
             steps=[],
             tool_calls=[],
@@ -542,6 +608,8 @@ class AgentService:
     ) -> AgentChatResponse:
         """执行 Agent 编排对话，返回结构化响应。"""
         trace_id = str(uuid.uuid4())
+        _usage_ctx.set(_UsageAccumulator())
+        _rag_contexts_ctx.set([])
         session_id = request.conversation_id or trace_id
         user_text = request.messages[-1].content if request.messages else ""
         policy = get_domain_policy(request.domain)
@@ -629,18 +697,24 @@ class AgentService:
                 metadata={"trace_id": trace_id, "agent_mode": agent_resp.mode_used},
             )
 
-        # 4. 转换步骤为 StepInfo
+        # 4. 转换步骤为 StepInfo（tool_calls 保留每次调用，去重交给前端展示层）
         steps: list[StepInfo] = []
-        tool_names: set[str] = set()
+        tool_calls: list[str] = []
         for s in agent_resp.steps:
             parsed = s.get("parsed") or {}
             action = s.get("action") or parsed.get("action")
-            if action:
-                tool_names.add(str(action))
+            # FC 后端一个 step 可能并行调用多个工具，优先取完整列表；
+            # 文本后端每个 step 只有一个 action，回退到单个 action。
+            _step_tools = s.get("tools")
+            if _step_tools:
+                for _t in _step_tools:
+                    tool_calls.append(str(_t))
+            elif action:
+                tool_calls.append(str(action))
             # plan_execute 子任务的工具名透传在 subtask_done 事件的 record.tools
             _record = s.get("record") or {}
             for _t in _record.get("tools") or []:
-                tool_names.add(str(_t))
+                tool_calls.append(str(_t))
             # thought: 优先 parsed（react 版），fallback 到 s（langgraph 版）
             thought = str(parsed.get("thought") or s.get("thought") or "")
             steps.append(
@@ -657,8 +731,8 @@ class AgentService:
                 )
             )
 
-        # 5. 构建响应
-        usage = {"total_steps": len(agent_resp.steps)}
+        # 5. 构建响应（token 用量来自本次请求累计，步骤数为编排真实步数）
+        usage = self._snapshot_usage(len(agent_resp.steps))
 
         # 6. 失败兜底：避免前端只显示"步骤 1"、回答区却一片空白
         content = agent_resp.answer
@@ -691,7 +765,7 @@ class AgentService:
                 rationale=intent_result.rationale,
             ),
             steps=steps,
-            tool_calls=sorted(tool_names),
+            tool_calls=sorted(tool_calls),
             reflection_score=(
                 _reflection.quality_score if _reflection else None
             ),
@@ -700,4 +774,5 @@ class AgentService:
             hallucination_detected=hallucination_detected,
             completeness_notes=completeness_notes,
             correction_applied=agent_resp.correction_applied,
+            retrieved_contexts=list(_rag_contexts_ctx.get() or []),
         )

@@ -100,9 +100,8 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
   }, []);
 
   // 自动选择模式（必须在 handleSend 之前定义）
-  const resolveMode = useCallback((text: string, hasDocs: boolean): ChatMode => {
-    if (hasDocs && /什么|如何|怎么|为什么|哪些|解释|含义|区别|建议|指导|用量|禁忌|副作用|说明书|指南/.test(text)) return 'rag';
-    if (/今天|最近|最新|202\d|新闻|搜索|查一下|天气|计算|算/.test(text)) return 'agent';
+  const resolveMode = useCallback((_text: string, _hasDocs: boolean): ChatMode => {
+    // 默认统一走 Agent 模式；RAG / 直连仅供手动调试使用，不再参与自动路由。
     return 'agent';
   }, []);
 
@@ -253,6 +252,13 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
                 completenessNotes={agentResult.completeness_notes}
                 correctionApplied={agentResult.correction_applied}
                 reflectionWarnings={agentResult.reflection_warnings}
+              />
+            )}
+            {agentResult && agentResult.retrieved_contexts && agentResult.retrieved_contexts.length > 0 && (
+              <RAGContext
+                contexts={agentResult.retrieved_contexts}
+                citations={[]}
+                loading={false}
               />
             )}
             <AgentSteps steps={agentSteps} loading={agentLoading} medical />

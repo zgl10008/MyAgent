@@ -10,8 +10,6 @@ interface Props {
 
 const links = [
   { to: '/', label: '健康咨询', icon: '🩺' },
-  { to: '/monitor', label: '健康趋势', icon: '📈' },
-  { to: '/medication', label: '用药管理', icon: '💊' },
   { to: '/documents', label: '健康档案', icon: '📑' },
 ];
 

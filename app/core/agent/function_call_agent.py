@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage
@@ -49,6 +49,28 @@ def _build_messages(
     return [SystemMessage(content=full_system), HumanMessage(content=query), *history]
 
 
+def _extract_token_usage(response: AIMessage) -> dict[str, int] | None:
+    """从 LangChain AIMessage.response_metadata 提取 token 用量。
+
+    兼容不同 provider/版本把 token 放在 ``token_usage`` 或 ``usage`` 下，
+    字段名可能是 snake_case 或 camelCase；三者任一有效即返回。
+    """
+    md = getattr(response, "response_metadata", None) or {}
+    if not isinstance(md, dict):
+        return None
+    tu = md.get("token_usage") or md.get("usage") or md.get("tokenUsage")
+    if not isinstance(tu, dict):
+        return None
+    pt = tu.get("prompt_tokens") or tu.get("promptTokens") or 0
+    ct = tu.get("completion_tokens") or tu.get("completionTokens") or 0
+    tt = tu.get("total_tokens") or tu.get("totalTokens") or (int(pt) + int(ct))
+    return {
+        "prompt_tokens": int(pt),
+        "completion_tokens": int(ct),
+        "total_tokens": int(tt),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Function Calling Agent
 # ---------------------------------------------------------------------------
@@ -68,6 +90,7 @@ class FunctionCallAgent:
         tools: Sequence[Any] = (),
         max_steps: int = 10,
         memory: Optional[MemoryLike] = None,
+        usage_callback: Optional[Callable[[dict[str, Any]], None]] = None,
     ):
         self._model_name = model_name
         self._api_key = api_key
@@ -76,6 +99,7 @@ class FunctionCallAgent:
         self._tools = {t.name: t for t in tools} if tools else {}
         self.max_steps = max(1, max_steps)
         self._memory = memory
+        self._usage_callback = usage_callback
         self._llm: Any = None
 
     def set_tools(self, tools: Sequence[Any]) -> None:
@@ -173,6 +197,10 @@ class FunctionCallAgent:
             # ── 1. 调用 LLM（bind_tools 已注入 Schema，模型自动决定是否调用工具） ──
             try:
                 response: AIMessage = await llm.ainvoke(messages)  # type: ignore[assignment]
+                if self._usage_callback is not None:
+                    _u = _extract_token_usage(response)
+                    if _u:
+                        self._usage_callback(_u)
             except Exception as exc:
                 logger.exception("LLM 调用失败 step=%d", step_idx)
                 return AgentResult(
@@ -182,12 +210,14 @@ class FunctionCallAgent:
 
             # ── 2. 有 tool_calls → 执行工具 ──
             if response.tool_calls:
+                _tc_names = [str(tc.get("name", "")) for tc in response.tool_calls]
                 rec: Dict[str, Any] = {
                     "step": step_idx,
                     "phase": "react",
                     "thought": str(response.content or "")[:2000],
-                    "action": response.tool_calls[0].get("name", ""),
+                    "action": _tc_names[0] if _tc_names else "",
                     "action_input": response.tool_calls[0].get("args", {}),
+                    "tools": _tc_names,
                 }
 
                 # 修复点：assistant 消息只能追加一次，随后为每个 tool_call 追加一条

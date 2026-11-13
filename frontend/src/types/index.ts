@@ -118,6 +118,8 @@ export interface AgentChatResponse {
   tool_calls: string[];
   reflection_score: number | null;
   degraded: boolean;
+  /** Agent 通过 rag_search 检索到的文档上下文 */
+  retrieved_contexts: RetrievalResult[];
   /** 反思扩展字段 */
   reflection_warnings: string[];
   hallucination_detected: boolean;

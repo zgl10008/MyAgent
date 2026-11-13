@@ -162,6 +162,8 @@ class PersistentMemoryManager:
         self._pg = pg_repo
         self._redis_ok = redis_client is not None
         self._pg_ok = True  # 先乐观标记，首次调用失败再降级
+        self._pg_cooldown = 5.0  # 秒；PG 失败后的重试冷却期
+        self._pg_retry_at = 0.0  # 下次允许重试 PG 的 monotonic 时间戳
         self._long_term: Any = None  # 可选：LongTermMemory（Milvus 语义召回）
 
         # Redis 短期记忆（滑动窗口 + 压缩）
@@ -199,6 +201,23 @@ class PersistentMemoryManager:
         logger.info("长期语义记忆已注入 PersistentMemoryManager")
 
     # ------------------------------------------------------------------
+    # PG 健康状态（可恢复降级：失败进入冷却期，冷却结束后自动重试，
+    # 而非一次性永久降级。这样单个脏入参或瞬时抖动不会把整个持久化层关死。）
+    # ------------------------------------------------------------------
+
+    def _pg_available(self) -> bool:
+        """PG 当前是否可尝试：健康，或冷却期已过自动恢复。"""
+        if not self._pg_ok and time.monotonic() >= self._pg_retry_at:
+            self._pg_ok = True
+            logger.info("PG 冷却期结束，恢复对 PostgreSQL 的访问")
+        return self._pg_ok
+
+    def _pg_failed(self) -> None:
+        """PG 调用失败：进入冷却期，冷却后可自动恢复。"""
+        self._pg_ok = False
+        self._pg_retry_at = time.monotonic() + self._pg_cooldown
+
+    # ------------------------------------------------------------------
     # MemoryLike 协议（供 Orchestrator / ReActAgent / PlannerAgent）
     # ------------------------------------------------------------------
 
@@ -228,7 +247,7 @@ class PersistentMemoryManager:
                 self._redis_ok = False
 
         # 2) 尝试 PostgreSQL
-        if self._pg_ok:
+        if self._pg_available():
             try:
                 items = await self._pg.get_recent_messages(session_id, limit)
                 logger.info("记忆读取 PostgreSQL session_id={} count={}", session_id, len(items))
@@ -237,8 +256,8 @@ class PersistentMemoryManager:
                     logger.info("记忆读取最终结果 session_id={} count={}", session_id, len(result))
                     return result
             except Exception as exc:
-                logger.warning("PG get_recent_messages 失败，降级内存: {}", exc)
-                self._pg_ok = False
+                logger.warning("PG get_recent_messages 失败，本次降级内存: {}", exc)
+                self._pg_failed()
 
         # 3) 最终兜底
         items = await self._fallback.get_relevant(session_id, query, limit)
@@ -295,13 +314,13 @@ class PersistentMemoryManager:
         )
 
         # PostgreSQL 主路径
-        if self._pg_ok:
+        if self._pg_available():
             try:
                 await self._pg.add_message(session_id, role, content, metadata)
                 logger.info("记忆写入 PostgreSQL 成功 session_id={} role={}", session_id, role)
             except Exception as exc:
-                self._pg_ok = False
-                logger.warning("PG append_turn 失败，后续降级内存: {}", exc)
+                self._pg_failed()
+                logger.warning("PG append_turn 失败，本次降级内存: {}", exc)
 
         # Redis 辅助路径
         if self._redis_ok and self._redis_stm is not None:
@@ -350,24 +369,24 @@ class PersistentMemoryManager:
 
     async def list_sessions(self) -> list[dict[str, Any]]:
         """列出所有会话。优先级：PG → 内存。"""
-        if self._pg_ok:
+        if self._pg_available():
             try:
                 return await self._pg.list_sessions()
             except Exception as exc:
-                logger.warning("PG list_sessions 失败，降级内存: {}", exc)
-                self._pg_ok = False
+                logger.warning("PG list_sessions 失败，本次降级内存: {}", exc)
+                self._pg_failed()
         return self._fallback.list_sessions()
 
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
         """获取会话详情（元数据 + 消息列表）。优先级：PG → 内存。"""
-        if self._pg_ok:
+        if self._pg_available():
             try:
                 result = await self._pg.get_session(session_id)
                 if result is not None:
                     return result
             except Exception as exc:
-                logger.warning("PG get_session 失败，降级内存: {}", exc)
-                self._pg_ok = False
+                logger.warning("PG get_session 失败，本次降级内存: {}", exc)
+                self._pg_failed()
         # 内存降级：从 fallback 组装
         history = self._fallback.get_session_history(session_id)
         sessions = self._fallback.list_sessions()
@@ -396,7 +415,7 @@ class PersistentMemoryManager:
         """删除会话：PG + Redis + 内存三方同步删除。"""
         ok = self._fallback.delete_session(session_id)
 
-        if self._pg_ok:
+        if self._pg_available():
             try:
                 pg_ok = await self._pg.delete_session(session_id)
                 ok = ok or pg_ok

@@ -1,10 +1,8 @@
 import { useState, useCallback } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import ChatPage from './pages/ChatPage';
 import DocumentsPage from './pages/DocumentsPage';
-import MedicationPage from './pages/MedicationPage';
-import MonitorPage from './pages/MonitorPage';
 
 function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -35,9 +33,8 @@ function App() {
                 />
               }
             />
-            <Route path="/monitor" element={<MonitorPage />} />
-            <Route path="/medication" element={<MedicationPage />} />
             <Route path="/documents" element={<DocumentsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>
