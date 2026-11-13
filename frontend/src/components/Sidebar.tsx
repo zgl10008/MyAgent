@@ -9,9 +9,10 @@ interface Props {
 }
 
 const links = [
-  { to: '/', label: '💬 对话', icon: '💬' },
-  { to: '/documents', label: '📄 文档', icon: '📄' },
-  { to: '/monitor', label: '📊 监控', icon: '📊' },
+  { to: '/', label: '健康咨询', icon: '🩺' },
+  { to: '/monitor', label: '健康趋势', icon: '📈' },
+  { to: '/medication', label: '用药管理', icon: '💊' },
+  { to: '/documents', label: '健康档案', icon: '📑' },
 ];
 
 export default function Sidebar({
@@ -21,11 +22,14 @@ export default function Sidebar({
   sessionRefreshKey,
 }: Props) {
   return (
-    <aside className="w-56 h-screen bg-slate-900 text-white flex flex-col shrink-0">
-      <div className="px-5 py-5 border-b border-slate-700">
-        <h1 className="text-lg font-bold tracking-tight">AI Agent</h1>
-        <p className="text-xs text-slate-400 mt-0.5">管理控制台</p>
+    <aside className="w-60 h-screen sidebar-grad text-white flex flex-col shrink-0">
+      <div className="px-5 py-5 border-b border-emerald-800/50">
+        <h1 className="text-lg font-bold tracking-tight flex items-center gap-2">
+          <span className="text-xl">🫀</span> HeartGuard
+        </h1>
+        <p className="text-xs text-emerald-300/80 mt-0.5">心血管慢病管理 Agent</p>
       </div>
+
       <nav className="py-3">
         {links.map((link) => (
           <NavLink
@@ -35,8 +39,8 @@ export default function Sidebar({
             className={({ isActive }) =>
               `flex items-center gap-3 px-5 py-2.5 text-sm transition-colors ${
                 isActive
-                  ? 'bg-slate-700 text-white font-medium'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  ? 'bg-emerald-600/40 text-white font-medium border-r-2 border-emerald-300'
+                  : 'text-emerald-100/80 hover:bg-emerald-800/40 hover:text-white'
               }`
             }
           >
@@ -46,8 +50,8 @@ export default function Sidebar({
         ))}
       </nav>
 
-      {/* 会话列表 */}
-      <div className="flex-1 overflow-hidden">
+      {/* 咨询记录 */}
+      <div className="flex-1 overflow-hidden border-t border-emerald-800/50 dark-scroll">
         <SessionList
           activeSessionId={activeSessionId}
           onSelectSession={onSelectSession}
@@ -56,8 +60,8 @@ export default function Sidebar({
         />
       </div>
 
-      <div className="px-5 py-3 border-t border-slate-700 text-xs text-slate-500">
-        Enterprise AI Agent v0.1
+      <div className="px-5 py-3 border-t border-emerald-800/50 text-xs text-emerald-400/70">
+        HeartGuard Agent v1.0
       </div>
     </aside>
   );

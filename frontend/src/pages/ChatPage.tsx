@@ -9,6 +9,7 @@ import IntentBadge from '../components/IntentBadge';
 import ToolCallLog from '../components/ToolCallLog';
 import RAGContext from '../components/RAGContext';
 import HealthPanel from '../components/HealthPanel';
+import MetricsPanel from '../components/MetricsPanel';
 
 let msgIdCounter = 0;
 function nextId() { return `msg_${Date.now()}_${++msgIdCounter}`; }
@@ -179,7 +180,7 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
 
   return (
     <div className="flex h-full">
-      <div className="w-60 border-r border-emerald-200 bg-white/70 overflow-y-auto p-3 shrink-0 space-y-3">
+      <div className="w-60 border-r border-slate-200 bg-white overflow-y-auto p-3 shrink-0 space-y-3">
         <HealthPanel onUpload={handleHealthUpload} ragChunks={ragChunks} documents={documents} />
       </div>
 
@@ -212,11 +213,11 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
             )}
           </div>
         </div>
-        <MessageList messages={messages} loading={loading} />
+        <MessageList messages={messages} loading={loading} onSuggest={handleSend} />
         <ChatInput onSend={handleSend} disabled={loading} placeholder="描述问题或询问已上传文档..." />
       </div>
 
-      <div className="w-80 border-l border-emerald-200 bg-white/70 overflow-y-auto p-4 shrink-0">
+      <div className="w-80 border-l border-slate-200 bg-white overflow-y-auto p-4 shrink-0">
         {(resolvedMode || mode) === 'agent' && (
           <div className="space-y-4">
             {(agentResult?.agent_mode === 'safety' || agentResult?.agent_mode === 'clarify') && (
@@ -232,6 +233,16 @@ export default function ChatPage({ sessionId, onSessionChange, onSessionsChanged
               </div>
             )}
             {agentResult?.intent && <IntentBadge intent={agentResult.intent} labelMap={intentLabelMap} />}
+            {agentResult && (
+              <MetricsPanel
+                usage={agentResult.usage}
+                stepsCount={agentSteps.length}
+                toolCalls={agentResult.tool_calls}
+                reflectionScore={agentResult.reflection_score}
+                degraded={agentResult.degraded}
+                agentMode={agentResult.agent_mode}
+              />
+            )}
             {agentResult && (
               <ToolCallLog
                 toolCalls={agentResult.tool_calls}

@@ -26,7 +26,7 @@ function SourceBadge({ source }: { source: string }) {
 export default function RAGContext({ contexts, citations, loading }: Props) {
   if (loading && contexts.length === 0) {
     return (
-      <div className="bg-white rounded-xl border border-slate-200 p-4">
+      <div className="card p-4">
         <h3 className="text-xs font-semibold text-slate-500 mb-3 uppercase tracking-wider">
           检索上下文
         </h3>
@@ -38,7 +38,7 @@ export default function RAGContext({ contexts, citations, loading }: Props) {
   if (contexts.length === 0) return null;
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-4">
+    <div className="card p-4">
       <h3 className="text-xs font-semibold text-slate-500 mb-3 uppercase tracking-wider">
         检索上下文
         <span className="ml-2 text-slate-400 font-normal normal-case">

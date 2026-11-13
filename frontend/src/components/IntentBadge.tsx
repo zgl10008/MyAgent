@@ -25,7 +25,7 @@ export default function IntentBadge({ intent, labelMap }: Props) {
   const map = labelMap || defaultLabelMap;
 
   return (
-    <div className="bg-white rounded-xl border border-emerald-200 p-4">
+    <div className="card p-4">
       <h3 className="text-xs font-semibold text-emerald-600 mb-2 uppercase tracking-wider">🎯 意图识别</h3>
       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
         <span className="text-sm font-medium text-slate-800">
